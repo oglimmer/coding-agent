@@ -1,0 +1,27 @@
+# Prune untagged ghcr.io image versions daily.
+name: cleanup-images
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        package:
+          - coding-agent-backend
+          - coding-agent-frontend
+          - coding-agent-worker
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@cd0cdb900b5dbf3a6f2cc869f0dbb0b8211f50c4 # v1
+        with:
+          package: ${{ matrix.package }}
+          delete-untagged: true
+          token: ${{ secrets.GITHUB_TOKEN }}

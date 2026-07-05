@@ -1,0 +1,19 @@
+coding-agent {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
+
+App URL:      {{ .Values.publicBaseURL }}
+Auth mode:    {{ .Values.auth.mode }}
+Worker image: {{ .Values.worker.image }}
+
+Required secret ({{ include "coding-agent.secretName" . }}):
+  JWT_SECRET, DEEPSEEK_API_KEY, WORKER_GITHUB_TOKEN
+  {{- if .Values.postgres.enabled }}
+  POSTGRES_PASSWORD  (bundled Postgres)
+  {{- else }}
+  DATABASE_URL       (external database)
+  {{- end }}
+  {{- if eq .Values.auth.mode "oidc" }}
+  OIDC_CLIENT_SECRET
+  {{- end }}
+
+The first user to sign in becomes an admin. Admins can add repositories and
+grant/revoke admin rights under /admin.

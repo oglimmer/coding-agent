@@ -1,0 +1,42 @@
+# Local development stack: Postgres + backend.
+# Run the frontend with `cd frontend && npm run dev` (Vite proxies /api -> :8080).
+# Copy .env.example to .env first. Job spawning needs a real cluster; without
+# one the backend still serves and job creation returns 503.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: coding_agent
+      POSTGRES_USER: coding_agent
+      POSTGRES_PASSWORD: coding_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coding_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      ADDR: ":8080"
+      PUBLIC_BASE_URL: "http://localhost:5173"
+      ALLOWED_ORIGINS: "http://localhost:5173"
+      JWT_SECRET: "local-dev-insecure-jwt-secret-change-me"
+      ALLOW_INSECURE_JWT_SECRET: "true"
+      AUTH_MODE: "password"
+      DEV_PASSWORD: "dev"
+      DATABASE_URL: "postgres://coding_agent:coding_agent@postgres:5432/coding_agent?sslmode=disable"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

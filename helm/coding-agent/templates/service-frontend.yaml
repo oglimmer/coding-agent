@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "coding-agent.frontend.fullname" . }}
+  labels:
+    {{- include "coding-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      targetPort: {{ .Values.frontend.service.port }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "coding-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend

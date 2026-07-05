@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "coding-agent.backend.fullname" . }}
+  labels:
+    {{- include "coding-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "coding-agent.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "coding-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: {{ include "coding-agent.serviceAccountName" . }}
+      {{- if .Values.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret }}
+      {{- end }}
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.backend.service.port }}
+          env:
+            - name: ADDR
+              value: ":{{ .Values.backend.service.port }}"
+            - name: PUBLIC_BASE_URL
+              value: {{ .Values.publicBaseURL | quote }}
+            - name: ALLOWED_ORIGINS
+              value: {{ .Values.publicBaseURL | quote }}
+            - name: AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "coding-agent.secretName" . }}
+                  key: JWT_SECRET
+            {{- if eq .Values.auth.mode "oidc" }}
+            - name: OIDC_ISSUER
+              value: {{ .Values.auth.oidc.issuer | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidc.clientId | quote }}
+            - name: OIDC_SCOPES
+              value: {{ .Values.auth.oidc.scopes | quote }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "coding-agent.secretName" . }}
+                  key: OIDC_CLIENT_SECRET
+            {{- end }}
+            {{- include "coding-agent.databaseEnv" . | nindent 12 }}
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "coding-agent.secretName" . }}
+                  key: DEEPSEEK_API_KEY
+            - name: DEEPSEEK_BASE_URL
+              value: {{ .Values.deepseek.baseURL | quote }}
+            - name: DEEPSEEK_MODEL
+              value: {{ .Values.deepseek.model | quote }}
+            - name: WORKER_IMAGE
+              value: {{ .Values.worker.image | quote }}
+            - name: WORKER_IMAGE_PULL_POLICY
+              value: {{ .Values.worker.imagePullPolicy | quote }}
+            - name: WORKER_MODEL
+              value: {{ .Values.worker.model | quote }}
+            - name: WORKER_EDITOR_MODEL
+              value: {{ .Values.worker.editorModel | quote }}
+            - name: WORKER_SECRET_NAME
+              value: {{ include "coding-agent.secretName" . | quote }}
+            - name: WORKER_SERVICE_ACCOUNT
+              value: {{ include "coding-agent.serviceAccountName" . | quote }}
+            - name: GITHUB_BOT_LOGIN
+              value: {{ .Values.worker.githubBotLogin | quote }}
+            - name: REVIEW_MAX_ROUNDS
+              value: {{ .Values.worker.reviewMaxRounds | quote }}
+            - name: JOB_TIMEOUT
+              value: {{ .Values.worker.jobTimeout | quote }}
+            - name: JOB_COOLDOWN
+              value: {{ .Values.worker.jobCooldown | quote }}
+            - name: MAX_CONCURRENT_JOBS
+              value: {{ .Values.worker.maxConcurrentJobs | quote }}
+            {{- if .Values.imagePullSecret }}
+            - name: WORKER_IMAGE_PULL_SECRET
+              value: {{ .Values.imagePullSecret | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.backend.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.backend.service.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.backend.securityContext | nindent 12 }}

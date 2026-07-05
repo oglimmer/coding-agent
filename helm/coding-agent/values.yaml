@@ -1,0 +1,127 @@
+# Default values for the coding-agent chart.
+#
+# The chart ships NO secrets. Provide a Kubernetes Secret (default name
+# "<release>-coding-agent-secret", or set existingSecret) with these keys:
+#   JWT_SECRET            random 32+ char string (session signing)
+#   POSTGRES_PASSWORD     bundled Postgres password (when postgres.enabled)
+#   DATABASE_URL          full DSN when using an external database
+#   OIDC_CLIENT_SECRET    OIDC client secret (when auth.mode=oidc)
+#   DEEPSEEK_API_KEY      DeepSeek API key (harmful-content gate + worker model)
+#   WORKER_GITHUB_TOKEN   GitHub token the worker uses to push/PR/merge
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Existing secret to pull sensitive env from. Empty => "<fullname>-secret".
+existingSecret: ""
+
+# imagePullSecret for the container images. The ghcr.io/oglimmer packages are
+# public, so this is empty by default. Set it to a docker-registry secret name
+# only if you make the packages private. Applies to backend, frontend, and
+# spawned worker Jobs.
+imagePullSecret: ""
+
+# External URL of the app (used for OIDC redirect + CORS).
+publicBaseURL: "https://coding-agent.example.com"
+
+auth:
+  # "oidc" (production) or "password" (dev stub only).
+  mode: oidc
+  oidc:
+    issuer: "https://id.example.com/realms/main"
+    clientId: "coding-agent"
+    scopes: "openid,profile,email"
+
+deepseek:
+  baseURL: "https://api.deepseek.com"
+  model: "deepseek-chat"
+
+worker:
+  # Image the spawned Jobs run. -worker is a separate image from the backend.
+  image: "ghcr.io/oglimmer/coding-agent-worker:latest"
+  # Always (default) | IfNotPresent | Never. Use IfNotPresent/Never for a local
+  # cluster where the worker image is loaded, not pulled from a registry.
+  imagePullPolicy: "Always"
+  # Aider runs in architect mode: `model` plans the change, `editorModel` turns
+  # the plan into precise edits. Splitting the two is aider's main quality lever.
+  model: "deepseek/deepseek-v4-pro"
+  editorModel: "deepseek/deepseek-chat"
+  # Reviewer login the worker treats as "self" when waiting for the PR review.
+  githubBotLogin: "coding-agent-bot"
+  reviewMaxRounds: 3
+  jobTimeout: "90m"
+  jobCooldown: "5m"
+  maxConcurrentJobs: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+backend:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/oglimmer/coding-agent-backend
+    tag: "latest"
+    pullPolicy: Always
+  service:
+    port: 8080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/oglimmer/coding-agent-frontend
+    tag: "latest"
+    pullPolicy: Always
+  service:
+    port: 80
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  securityContext: {}
+
+postgres:
+  enabled: true
+  image:
+    # Pin the MAJOR version: the data dir is tied to it (disable Renovate major bumps).
+    repository: postgres
+    tag: "16-alpine"
+  database: coding_agent
+  user: coding_agent
+  storage: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: coding-agent.example.com
+  annotations:
+    cert-manager.io/cluster-issuer: "oglimmer-com-dns"
+  tls:
+    enabled: true
+    secretName: coding-agent-tls

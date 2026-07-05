@@ -1,0 +1,32 @@
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: bash -c 'cd backend && test -z "$(gofmt -l .)"'
+        language: system
+        files: '^backend/.*\.go$'
+        pass_filenames: false
+      - id: go-vet
+        name: go vet
+        entry: bash -c 'cd backend && go vet ./...'
+        language: system
+        files: '^backend/.*\.go$'
+        pass_filenames: false
+      - id: eslint
+        name: eslint
+        entry: bash -c 'cd frontend && npx eslint .'
+        language: system
+        files: '^frontend/src/.*\.(ts|vue)$'
+        pass_filenames: false
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        files: '\.sh$'
+      - id: helm-lint
+        name: helm lint
+        entry: helm lint helm/coding-agent
+        language: system
+        files: '^helm/'
+        pass_filenames: false

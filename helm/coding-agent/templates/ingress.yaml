@@ -1,0 +1,55 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "coding-agent.fullname" . }}
+  labels:
+    {{- include "coding-agent.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # Specific backend paths first, SPA catch-all last.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "coding-agent.backend.fullname" . }}
+                port:
+                  number: {{ .Values.backend.service.port }}
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "coding-agent.backend.fullname" . }}
+                port:
+                  number: {{ .Values.backend.service.port }}
+          - path: /readyz
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "coding-agent.backend.fullname" . }}
+                port:
+                  number: {{ .Values.backend.service.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "coding-agent.frontend.fullname" . }}
+                port:
+                  number: {{ .Values.frontend.service.port }}
+{{- end }}
