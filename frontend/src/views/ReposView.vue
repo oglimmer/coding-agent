@@ -80,6 +80,25 @@ function requestFeature(repo: Repo) {
         <button class="btn btn-primary" :disabled="submitting || !owner" type="submit">Add</button>
       </form>
       <p v-if="formError" class="error-banner" style="margin-top: 0.75rem">{{ formError }}</p>
+
+      <div class="reqs">
+        <p class="reqs-title">Before adding a repo, make sure it's set up for the agent:</p>
+        <ul>
+          <li>
+            The worker's GitHub token has <strong>Contents</strong> and
+            <strong>Pull requests</strong> write access to the repository.
+          </li>
+          <li>
+            The base branch exists and does <strong>not</strong> require a human approving
+            review — the agent merges through the API, and the AI reviewer only comments.
+          </li>
+          <li><strong>Squash merging is enabled</strong> in the repository settings.</li>
+          <li>
+            The AI review workflow (<code>oglimmer/review-action</code>) is installed with an
+            <code>OPENAI_API_KEY</code> secret — jobs wait for its review and time out without it.
+          </li>
+        </ul>
+      </div>
     </div>
 
     <p v-if="loading" class="muted">Loading repositories…</p>
@@ -116,6 +135,34 @@ function requestFeature(repo: Repo) {
 }
 .add h3 {
   margin-top: 0;
+}
+.reqs {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.reqs-title {
+  margin: 0 0 0.4rem;
+  font-weight: 600;
+}
+.reqs ul {
+  margin: 0;
+  padding-left: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.reqs code {
+  font-size: 0.82em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--bg);
+}
+.reqs strong {
+  color: var(--text);
+  font-weight: 600;
 }
 .row {
   display: flex;
