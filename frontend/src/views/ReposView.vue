@@ -86,7 +86,8 @@ function requestFeature(repo: Repo) {
         <ul>
           <li>
             The worker's GitHub token has <strong>Contents</strong> and
-            <strong>Pull requests</strong> write access to the repository.
+            <strong>Pull requests</strong> write access — plus <strong>Workflows</strong>
+            write if the agent may change files under <code>.github/workflows/</code>.
           </li>
           <li>
             The base branch exists and does <strong>not</strong> require a human approving
