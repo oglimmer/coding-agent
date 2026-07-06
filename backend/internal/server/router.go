@@ -68,6 +68,7 @@ func NewRouter(a *App) http.Handler {
 			r.Get("/repos", a.handleListRepos)
 			r.Get("/jobs", a.handleListJobs)
 			r.Get("/jobs/{id}", a.handleGetJob)
+			r.Get("/jobs/{id}/logs", a.handleJobLogs)
 
 			// Write surface — users and admins only; viewers are read-only.
 			r.Group(func(r chi.Router) {

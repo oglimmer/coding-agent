@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, errMsg } from '@/api'
 import { useAsyncData } from '@/composables/useAsyncData'
@@ -7,6 +7,7 @@ import { useAutoReload } from '@/composables/useAutoReload'
 import { useConfirm } from '@/composables/useConfirm'
 import { relativeTime } from '@/lib/format'
 import StatusBadge from '@/components/StatusBadge.vue'
+import JobLog from '@/components/JobLog.vue'
 import type { Job } from '@/types'
 
 const props = defineProps<{ id: string }>()
@@ -22,9 +23,40 @@ const canRetry = computed(() => {
 const actionError = ref<string | null>(null)
 const busy = ref(false)
 
+// Worker pod logs. A pod exists only once the job leaves 'checking', and lingers
+// (TTL) for a while after it finishes, so we show logs for running and terminal
+// jobs alike.
+const logs = ref('')
+const hadPod = computed(() => {
+  const s = job.value?.status
+  return s === 'running' || s === 'success' || s === 'failed'
+})
+
+async function loadLogs() {
+  if (!job.value || !hadPod.value) return
+  try {
+    const res = await api.getJobLogs(job.value.id)
+    logs.value = res.logs
+  } catch {
+    // Transient (pod starting, brief API hiccup) — keep the last good logs.
+  }
+}
+
+// Refresh logs when the job first resolves and on every status transition (so
+// the terminal snapshot is captured once the agent finishes).
+watch(
+  () => (job.value ? `${job.value.id}:${job.value.status}` : ''),
+  () => void loadLogs(),
+)
+
 useAutoReload(() => {
   if (inFlight.value) void reload()
 }, 5000)
+
+// While the agent works, stream logs a little faster than the status poll.
+useAutoReload(() => {
+  if (inFlight.value) void loadLogs()
+}, 3000)
 
 async function retry() {
   if (!job.value) return
@@ -90,6 +122,8 @@ async function remove() {
       <div v-if="job.reason" class="reason" :class="{ bad: job.status === 'failed' || job.status === 'rejected' }">
         {{ job.reason }}
       </div>
+
+      <JobLog v-if="hadPod" :text="logs" :live="inFlight" />
 
       <p v-if="actionError" class="error-banner" style="margin-top: 1rem">{{ actionError }}</p>
 

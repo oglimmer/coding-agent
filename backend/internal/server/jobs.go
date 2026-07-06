@@ -176,6 +176,48 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, updated)
 }
 
+// jobLogTailLines bounds how much of the worker pod's log tail the detail view
+// streams. Enough to show the whole run for a typical job without shipping
+// megabytes on every poll.
+const jobLogTailLines = 2000
+
+// handleJobLogs streams the worker pod's recent log output for a job so the UI
+// can show live progress while the agent works. Owner or admin only, mirroring
+// handleGetJob. A job that never spawned a pod (still checking, rejected, or no
+// cluster configured) and a pod that has already been TTL-cleaned both return an
+// empty body rather than an error, so the frontend can poll uniformly.
+func (a *App) handleJobLogs(w http.ResponseWriter, r *http.Request) {
+	u, _ := userFromContext(r.Context())
+	job, err := a.Store.JobByID(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		if err == ErrNotFound {
+			writeErr(w, http.StatusNotFound, "job not found")
+			return
+		}
+		a.serverErr(w, r, err, "")
+		return
+	}
+	if job.UserID != u.ID && !u.IsAdmin() {
+		writeErr(w, http.StatusForbidden, "not your job")
+		return
+	}
+
+	if a.K8s == nil || job.K8sJobName == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"logs": ""})
+		return
+	}
+
+	logs, err := a.K8s.PodLogs(r.Context(), job.K8sJobName, jobLogTailLines)
+	if err != nil {
+		// The pod may not have started yet, or was cleaned up after finishing.
+		// Treat as "no logs right now" so the UI keeps polling gracefully.
+		log.Printf("WARN jobs: logs for %s (%s): %v", job.ID, job.K8sJobName, err)
+		writeJSON(w, http.StatusOK, map[string]any{"logs": "", "unavailable": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"logs": logs})
+}
+
 // handleListJobs returns the caller's jobs, or all jobs for admins.
 func (a *App) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFromContext(r.Context())

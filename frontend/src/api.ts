@@ -92,6 +92,8 @@ export const api = {
 
   listJobs: (all = false) => request<Job[]>('GET', `/jobs${all ? '?all=true' : ''}`),
   getJob: (id: string) => request<Job>('GET', `/jobs/${id}`),
+  getJobLogs: (id: string) =>
+    request<{ logs: string; unavailable?: boolean }>('GET', `/jobs/${id}/logs`),
   createJob: (repoId: string, feature: string) => request<Job>('POST', '/jobs', { repoId, feature }),
   deleteJob: (id: string) => request<void>('DELETE', `/jobs/${id}`),
 
