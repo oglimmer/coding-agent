@@ -94,7 +94,7 @@ async function remove() {
 </script>
 
 <template>
-  <div class="container narrow">
+  <div class="container detail">
     <RouterLink to="/jobs" class="back muted">← All jobs</RouterLink>
 
     <p v-if="loading && !job" class="muted">Loading…</p>
@@ -141,8 +141,10 @@ async function remove() {
 </template>
 
 <style scoped>
-.narrow {
-  max-width: 680px;
+/* Wider than the default container so the worker log — whose lines arrive
+   pre-wrapped at ~72 columns — has room to render without re-wrapping. */
+.detail {
+  max-width: 1040px;
 }
 .back {
   display: inline-block;

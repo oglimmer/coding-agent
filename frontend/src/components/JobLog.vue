@@ -158,8 +158,9 @@ watch(mode, (m) => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.8rem;
   line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  /* The worker streams pre-wrapped output; honour its own line breaks and let
+     genuinely long lines scroll horizontally rather than re-wrapping them. */
+  white-space: pre;
   color: var(--text);
 }
 .steps {
