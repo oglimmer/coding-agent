@@ -386,12 +386,29 @@ PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
 echo "=== opened PR #${PR_NUMBER}: ${PR_URL} ==="
 
 # --- review -> fix loop ------------------------------------------------------
+# The AI reviewer (oglimmer/review-action) keeps its whole verdict in ONE sticky
+# PR conversation comment, edited in place on every push and tagged with a hidden
+# marker. It posts a formal PR review object only when it has inline findings, and
+# even then the review body is just the marker — so the reviews endpoint is not a
+# reliable "did the reviewer respond" signal or a source of prose. We key off the
+# sticky comment instead. The marker below matches the string the action emits on
+# its summary comment; inline-comment markers are stripped generically on render.
+REVIEW_SUMMARY_MARKER='<!-- openai-pr-review-action -->'
+
+# The reviewer's summary, as plain prose. Reads the sticky conversation comment
+# (issues endpoint), takes the latest one carrying the summary marker, and strips
+# any hidden HTML-comment markers the action embeds.
+fetch_review_summary() {
+  gh_api GET "${API}/issues/${PR_NUMBER}/comments?per_page=100" \
+    | jq -r --arg m "$REVIEW_SUMMARY_MARKER" \
+        '[.[] | select((.body // "") | contains($m))] | last
+         | (.body // "(no summary)") | gsub("<!--[^>]*-->"; "") | gsub("^\\s+|\\s+$"; "")'
+}
+
 # Wait until the head commit's check runs are complete AND the reviewer has
-# responded (a review of ANY state, including COMMENTED) — or a check has already
-# failed, which is actionable on its own. Reviewers vary: some emit a formal
-# APPROVED/CHANGES_REQUESTED verdict, many (e.g. GitHub Action reviewers) only post
-# a COMMENTED review plus a pass/fail status check. We must not hang waiting for a
-# verdict that will never come. Returns via globals:
+# responded (its sticky summary comment is present) — or a check has already
+# failed, which is actionable on its own. We must not hang waiting for a formal
+# verdict that this reviewer does not emit. Returns via globals:
 #   REVIEW_STATE  "APPROVED" | "CHANGES_REQUESTED" | ""  (formal verdict, if any)
 #   REVIEW_SEEN   "yes" | "no"                            (reviewer responded at all)
 #   FAILED_CHECKS count of failing/blocking check runs
@@ -401,20 +418,26 @@ wait_for_review() {
   local iters=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
     iters=$((iters + 1))
-    local checks reviews total completed seen
+    local checks total completed seen
     checks=$(gh_api GET "${API}/commits/${head_sha}/check-runs?per_page=100")
     total=$(echo "$checks" | jq -r '.check_runs | length // 0')
     completed=$(echo "$checks" | jq -r '[.check_runs[]? | select(.status=="completed")] | length')
     FAILED_CHECKS=$(echo "$checks" | jq -r \
       '[.check_runs[]? | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled" or .conclusion=="action_required")] | length')
 
-    reviews=$(gh_api GET "${API}/pulls/${PR_NUMBER}/reviews?per_page=100")
-    # Formal verdict, if the reviewer emitted one.
-    REVIEW_STATE=$(echo "$reviews" | jq -r --arg bot "$BOT_LOGIN" \
-      '[.[] | select(.user.login != $bot) | select(.state=="APPROVED" or .state=="CHANGES_REQUESTED")] | last | .state // ""')
-    # Whether the reviewer has weighed in at all — COMMENTED reviews count.
-    seen=$(echo "$reviews" | jq -r --arg bot "$BOT_LOGIN" \
-      '[.[] | select(.user.login != $bot)] | length')
+    # Formal verdict, only if the reviewer emitted one (it does so via a
+    # REQUEST_CHANGES event when request-changes-on is configured; otherwise it
+    # posts no formal verdict and the sticky summary below is the whole review).
+    REVIEW_STATE=$(gh_api GET "${API}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+      | jq -r --arg bot "$BOT_LOGIN" \
+        '[.[] | select(.user.login != $bot) | select(.state=="APPROVED" or .state=="CHANGES_REQUESTED")] | last | .state // ""')
+    # Whether the reviewer has weighed in on this commit: its sticky summary
+    # comment is present. The commit's check runs (below) gate freshness, so a
+    # summary carried over from a prior push is only acted on once this commit's
+    # review run has completed.
+    seen=$(gh_api GET "${API}/issues/${PR_NUMBER}/comments?per_page=100" \
+      | jq -r --arg m "$REVIEW_SUMMARY_MARKER" \
+        '[.[] | select((.body // "") | contains($m))] | length')
     REVIEW_SEEN="no"; [ "${seen:-0}" -gt 0 ] && REVIEW_SEEN="yes"
 
     # "done" = all present checks completed. total==0 is ambiguous: either the repo
@@ -448,15 +471,12 @@ collect_findings() {
     echo "minimal, keep tests passing, and do not introduce unrelated modifications."
     echo
     echo "--- REVIEW SUMMARY ---"
-    # Take the latest non-self review body regardless of state — this reviewer
-    # posts COMMENTED reviews, not a formal CHANGES_REQUESTED verdict.
-    gh_api GET "${API}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-      | jq -r --arg bot "$BOT_LOGIN" \
-        '[.[] | select(.user.login != $bot) | select((.body // "") != "")] | last | .body // "(no summary)"'
+    # The reviewer's prose lives in its sticky summary comment, not the review body.
+    fetch_review_summary
     echo
     echo "--- INLINE COMMENTS ---"
     gh_api GET "${API}/pulls/${PR_NUMBER}/comments?per_page=100" \
-      | jq -r '.[]? | "\(.path):\(.line // .original_line // "?"): \(.body)"'
+      | jq -r '.[]? | "\(.path):\(.line // .original_line // "?"): \((.body // "") | gsub("<!--[^>]*-->"; "") | gsub("^\\s+|\\s+$"; ""))"'
     echo
     echo "--- FAILED CHECKS ---"
     gh_api GET "${API}/commits/${head_sha}/check-runs?per_page=100" \
@@ -467,13 +487,11 @@ collect_findings() {
 # The reviewer's latest body + inline comments as plain text (for the LLM judge).
 gather_review_text() {
   echo "REVIEW BODY:"
-  gh_api GET "${API}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-    | jq -r --arg bot "$BOT_LOGIN" \
-      '[.[] | select(.user.login != $bot) | select((.body // "") != "")] | last | .body // "(no review body)"'
+  fetch_review_summary
   echo
   echo "INLINE COMMENTS:"
   gh_api GET "${API}/pulls/${PR_NUMBER}/comments?per_page=100" \
-    | jq -r '.[]? | "- \(.path):\(.line // .original_line // "?"): \(.body)"'
+    | jq -r '.[]? | "- \(.path):\(.line // .original_line // "?"): \((.body // "") | gsub("<!--[^>]*-->"; "") | gsub("^\\s+|\\s+$"; ""))"'
 }
 
 # Classify whether a prose review approves the change. Sets JUDGE_VERDICT
