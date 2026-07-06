@@ -22,13 +22,15 @@ existingSecret: ""
 imagePullSecret: ""
 
 # External URL of the app (used for OIDC redirect + CORS).
-publicBaseURL: "https://coding-agent.example.com"
+publicBaseURL: "https://coding-agent.oglimmer.com"
 
 auth:
   # "oidc" (production) or "password" (dev stub only).
   mode: oidc
   oidc:
-    issuer: "https://id.example.com/realms/main"
+    # Keycloak realm "oglimmer". Modern Keycloak URL scheme (no /auth prefix);
+    # exposes .well-known/openid-configuration under this issuer.
+    issuer: "https://id.oglimmer.de/realms/oglimmer"
     clientId: "coding-agent"
     scopes: "openid,profile,email"
 
@@ -119,7 +121,7 @@ postgres:
 ingress:
   enabled: true
   className: nginx
-  host: coding-agent.example.com
+  host: coding-agent.oglimmer.com
   annotations:
     cert-manager.io/cluster-issuer: "oglimmer-com-dns"
   tls:
