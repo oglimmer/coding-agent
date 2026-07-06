@@ -70,5 +70,9 @@ jobs:
       # daemon (native arm64). Avoids buildx's docker-container driver, whose push
       # session is unreliable on the in-cluster runner. oglimmer.sh passes all the
       # VERSION/GIT_COMMIT/VITE_* build-args and pushes :<version> + :latest.
+      # The runner has no kubectl, so oglimmer.sh triggers the rollout via the
+      # restart hook (restart.oglimmer.com) using the RESTART_TOKEN secret.
       - if: matrix.changed == 'true'
+        env:
+          RESTART_TOKEN: ${{ secrets.RESTART_TOKEN }}
         run: ./oglimmer.sh build ${{ matrix.flag }} --platform auto

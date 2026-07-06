@@ -21,6 +21,13 @@ REGISTRY="ghcr.io/oglimmer"
 PLATFORM="auto"
 PUSH=true
 
+# Restart hook — triggers an in-cluster rollout after new :latest images are
+# pushed. CI build runners have no kubectl/cluster access, so oglimmer.sh POSTs
+# to the hook (authenticated with RESTART_TOKEN) instead. Disabled automatically
+# when RESTART_TOKEN is unset (e.g. local builds) or when --no-push is given.
+RESTART_HOOK_URL="${RESTART_HOOK_URL:-https://restart.oglimmer.com/restart}"
+K8S_NAMESPACE="${K8S_NAMESPACE:-coding-agent}"
+
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -45,6 +52,22 @@ resolve_platform_arg() {
   esac
 }
 
+# Trigger an in-cluster rollout of a deployment via the restart hook. Called
+# after a successful push so the freshly pushed :latest image is picked up.
+# No-op (skipped) unless RESTART_TOKEN is set; worker has no deployment.
+restart_via_hook() {
+  local deployment="$1"
+  if [ -z "${RESTART_TOKEN:-}" ]; then
+    log "RESTART_TOKEN not set — skipping rollout of ${deployment}"
+    return 0
+  fi
+  local url="${RESTART_HOOK_URL}/${K8S_NAMESPACE}/${deployment}"
+  log "restarting ${deployment} via hook: ${url}"
+  if ! curl -fsS -X POST -H "Authorization: Bearer ${RESTART_TOKEN}" "$url" >/dev/null; then
+    die "failed to trigger restart for ${deployment} via hook"
+  fi
+}
+
 build_image() {
   local name="$1" context="$2"; shift 2
   local tag="${REGISTRY}/coding-agent-${name}:${VERSION}"
@@ -64,6 +87,11 @@ build_image() {
     log "pushing ${tag}"
     docker push "$tag"
     docker push "$latest"
+    # backend/frontend run as Deployments and need a rollout to pick up the new
+    # :latest image; worker runs as ad-hoc Jobs, so there is nothing to restart.
+    case "$name" in
+      backend|frontend) restart_via_hook "coding-agent-${name}" ;;
+    esac
   fi
 }
 
