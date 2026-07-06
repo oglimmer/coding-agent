@@ -120,13 +120,17 @@ postgres:
 
 ingress:
   enabled: true
-  # k3s ships Traefik as the only ingress controller (ingressClass "traefik").
-  # Using "nginx" here leaves the Ingress unclaimed, so Traefik serves its
-  # default self-signed cert instead of the cert-manager one below.
-  className: traefik
+  # Empty => inherit the cluster's default ingressClass (Traefik on this k3s
+  # cluster — the only ingress controller). Matches the plugin-skill-hosting
+  # chart. Do NOT set "nginx": no nginx controller exists, so the Ingress would
+  # be left unclaimed and Traefik would serve its default self-signed cert
+  # instead of the cert-manager one below.
+  className: ""
   host: coding-agent.oglimmer.com
   annotations:
     cert-manager.io/cluster-issuer: "oglimmer-com-dns"
   tls:
     enabled: true
-    secretName: coding-agent-tls
+    # House convention (cf. tls-plugin-skill-hosting-ingress-dns,
+    # tls-trivia-ingress-dns): tls-<app>-ingress-dns.
+    secretName: tls-coding-agent-ingress-dns
