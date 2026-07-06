@@ -27,9 +27,12 @@ pull request, waits for the repository's GitHub Action review, fixes the finding
 ```
 
 - **SSO/OIDC login.** Any OIDC provider (env-configured); a dev password stub for local work.
-  **The first user to sign in becomes an admin.** Admins grant/revoke admin on other users.
-- **Admins configure the repository list** (owner/name/base-branch, stored in Postgres). Every
-  logged-in user can pick a repo and submit a feature description.
+  **The first user to sign in becomes an admin.**
+- **Three roles — `viewer` < `user` < `admin`.** New accounts start as read-only **viewers**;
+  an admin promotes them to **user** (can submit feature requests) or **admin** (can also configure
+  repositories and manage other users' roles). Admins configure the repository list
+  (owner/name/base-branch, stored in Postgres); any user or admin can pick a repo and submit a
+  feature description.
 - **Harmful requests are blocked** by a DeepSeek classifier before any compute is spent.
 - The **prompt always requires tests**, even when the user doesn't mention them.
 - The **review→fix→merge loop** is what distinguishes this from a fire-and-forget PR bot.
@@ -81,11 +84,13 @@ helm install coding-agent helm/coding-agent \
 
 ## Assumptions
 
-- Every configured repository has a GitHub Action that reviews PRs (a PR review of any state —
-  `APPROVED`, `CHANGES_REQUESTED`, or `COMMENTED` — and/or status checks). The worker waits for CI
-  to finish and the reviewer to respond, then: **fixes** when a check fails or the review is
-  `CHANGES_REQUESTED` (up to `REVIEW_MAX_ROUNDS`), and **squash-merges** once checks are green and no
-  changes were requested. A `COMMENTED` review with passing checks does not block the merge.
+- Every configured repository has a GitHub Action that reviews PRs. The worker detects that the
+  reviewer has responded by its **sticky summary comment** (the reviewer keeps its whole verdict in
+  one PR conversation comment, edited in place on each push) and reads any formal `APPROVED` /
+  `CHANGES_REQUESTED` review state alongside CI status checks. It waits for CI to finish and the
+  reviewer to respond, then: **fixes** when a check fails, the review is `CHANGES_REQUESTED`, or an
+  LLM judge rules the prose review requests changes (up to `REVIEW_MAX_ROUNDS`), and
+  **squash-merges** once checks are green and the review approves.
 - Coding agent = aider + `deepseek/deepseek-v4-pro` (swappable via `WORKER_MODEL`).
 
 ## License
