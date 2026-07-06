@@ -87,8 +87,21 @@ func (a *App) authMiddleware(next http.Handler) http.Handler {
 func (a *App) requireAdminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, ok := userFromContext(r.Context())
-		if !ok || !u.IsAdmin {
+		if !ok || !u.IsAdmin() {
 			writeErr(w, http.StatusForbidden, "admin access required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requireWriterMiddleware gates routes that create or mutate resources. Viewers
+// are read-only until an admin promotes them to user or admin.
+func (a *App) requireWriterMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, ok := userFromContext(r.Context())
+		if !ok || !u.CanWrite() {
+			writeErr(w, http.StatusForbidden, "write access required; ask an admin to grant you access")
 			return
 		}
 		next.ServeHTTP(w, r)

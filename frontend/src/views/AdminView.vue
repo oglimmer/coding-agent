@@ -5,37 +5,46 @@ import { useAsyncData } from '@/composables/useAsyncData'
 import { useConfirm } from '@/composables/useConfirm'
 import { useAuthStore } from '@/stores/auth'
 import { relativeTime } from '@/lib/format'
-import type { User } from '@/types'
+import type { Role, User } from '@/types'
 
 const auth = useAuthStore()
 const { confirm } = useConfirm()
 const { data: users, loading, error, reload } = useAsyncData<User[]>(() => api.listUsers(), [])
 const actionError = ref<string | null>(null)
+const busyId = ref<string | null>(null)
 
-async function grant(u: User) {
-  actionError.value = null
-  try {
-    await api.grantAdmin(u.id)
-    await reload()
-  } catch (e) {
-    actionError.value = errMsg(e)
+const ROLES: { value: Role; label: string }[] = [
+  { value: 'viewer', label: 'Viewer' },
+  { value: 'user', label: 'User' },
+  { value: 'admin', label: 'Admin' },
+]
+
+async function changeRole(u: User, role: Role) {
+  if (role === u.role) return
+
+  if (u.role === 'admin' && role !== 'admin') {
+    const ok = await confirm({
+      title: 'Demote admin',
+      message: `Remove admin rights from ${u.name}?`,
+      confirmText: 'Demote',
+      danger: true,
+    })
+    if (!ok) {
+      await reload() // reset the select back to the current value
+      return
+    }
   }
-}
 
-async function revoke(u: User) {
-  const ok = await confirm({
-    title: 'Revoke admin',
-    message: `Remove admin rights from ${u.name}?`,
-    confirmText: 'Revoke',
-    danger: true,
-  })
-  if (!ok) return
   actionError.value = null
+  busyId.value = u.id
   try {
-    await api.revokeAdmin(u.id)
+    await api.setUserRole(u.id, role)
     await reload()
   } catch (e) {
     actionError.value = errMsg(e)
+    await reload()
+  } finally {
+    busyId.value = null
   }
 }
 </script>
@@ -43,7 +52,10 @@ async function revoke(u: User) {
 <template>
   <div class="container">
     <h1>Admin · Users</h1>
-    <p class="muted">Grant or revoke admin rights. Admins manage repositories and other admins.</p>
+    <p class="muted">
+      New accounts start as <strong>viewers</strong> (read-only). Promote to <strong>user</strong> to let them
+      submit feature requests, or <strong>admin</strong> to also manage repositories and other users.
+    </p>
 
     <p v-if="actionError" class="error-banner">{{ actionError }}</p>
     <p v-if="loading" class="muted">Loading users…</p>
@@ -57,7 +69,6 @@ async function revoke(u: User) {
             <th>Email</th>
             <th>Role</th>
             <th>Joined</th>
-            <th />
           </tr>
         </thead>
         <tbody>
@@ -68,13 +79,16 @@ async function revoke(u: User) {
             </td>
             <td class="muted">{{ u.email }}</td>
             <td>
-              <span :class="u.isAdmin ? 'role admin' : 'role'">{{ u.isAdmin ? 'Admin' : 'User' }}</span>
+              <select
+                class="role-select"
+                :value="u.role"
+                :disabled="busyId === u.id"
+                @change="changeRole(u, ($event.target as HTMLSelectElement).value as Role)"
+              >
+                <option v-for="r in ROLES" :key="r.value" :value="r.value">{{ r.label }}</option>
+              </select>
             </td>
             <td class="muted nowrap">{{ relativeTime(u.createdAt) }}</td>
-            <td class="nowrap">
-              <button v-if="!u.isAdmin" class="btn" @click="grant(u)">Make admin</button>
-              <button v-else class="btn btn-danger" @click="revoke(u)">Revoke admin</button>
-            </td>
           </tr>
         </tbody>
       </table>
@@ -91,16 +105,12 @@ async function revoke(u: User) {
 .nowrap {
   white-space: nowrap;
 }
-.role {
-  font-size: 0.8rem;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
+.role-select {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
   border: 1px solid var(--border);
-  color: var(--text-muted);
-}
-.role.admin {
-  color: var(--accent);
-  border-color: rgb(var(--accent-rgb) / 0.4);
-  background: rgb(var(--accent-rgb) / 0.12);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
 }
 </style>

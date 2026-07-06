@@ -180,7 +180,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFromContext(r.Context())
 	filter := u.ID
-	if u.IsAdmin && r.URL.Query().Get("all") == "true" {
+	if u.IsAdmin() && r.URL.Query().Get("all") == "true" {
 		filter = ""
 	}
 	jobs, err := a.Store.ListJobs(r.Context(), filter, 100)
@@ -206,7 +206,7 @@ func (a *App) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		a.serverErr(w, r, err, "")
 		return
 	}
-	if job.UserID != u.ID && !u.IsAdmin {
+	if job.UserID != u.ID && !u.IsAdmin() {
 		writeErr(w, http.StatusForbidden, "not your job")
 		return
 	}
@@ -226,7 +226,7 @@ func (a *App) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 		a.serverErr(w, r, err, "")
 		return
 	}
-	if job.UserID != u.ID && !u.IsAdmin {
+	if job.UserID != u.ID && !u.IsAdmin() {
 		writeErr(w, http.StatusForbidden, "not your job")
 		return
 	}

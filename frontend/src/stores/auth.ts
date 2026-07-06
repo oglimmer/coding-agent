@@ -12,7 +12,9 @@ export const useAuthStore = defineStore('auth', () => {
   let freshUserPromise: Promise<User> | null = null
 
   const isAuthenticated = computed(() => token.value !== null)
-  const isAdmin = computed(() => user.value?.isAdmin === true)
+  const isAdmin = computed(() => user.value?.role === 'admin')
+  // Viewers are read-only; users and admins may submit feature requests.
+  const canWrite = computed(() => user.value?.role === 'user' || user.value?.role === 'admin')
 
   function loadToken(): string | null {
     const t = localStorage.getItem(TOKEN_KEY)
@@ -80,6 +82,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     isAuthenticated,
     isAdmin,
+    canWrite,
     setSession,
     clear,
     devLogin,

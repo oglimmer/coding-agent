@@ -96,7 +96,7 @@ function requestFeature(repo: Repo) {
           <div class="muted small">base: {{ repo.baseBranch }}</div>
         </div>
         <div class="actions">
-          <button class="btn btn-primary" @click="requestFeature(repo)">Request feature</button>
+          <button v-if="auth.canWrite" class="btn btn-primary" @click="requestFeature(repo)">Request feature</button>
           <button v-if="auth.isAdmin" class="btn btn-danger" @click="removeRepo(repo)">Remove</button>
         </div>
       </li>

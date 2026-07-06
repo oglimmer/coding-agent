@@ -10,16 +10,44 @@ import (
 // ErrNotFound is returned by Store lookups when no row matches.
 var ErrNotFound = errors.New("not found")
 
+// Role is a user's privilege level. Ordered viewer < user < admin: a viewer can
+// only read, a user can additionally create jobs, an admin can manage repos and
+// other users. New accounts start as viewers and must be promoted by an admin.
+type Role string
+
+const (
+	RoleViewer Role = "viewer"
+	RoleUser   Role = "user"
+	RoleAdmin  Role = "admin"
+)
+
+// Valid reports whether r is one of the known roles.
+func (r Role) Valid() bool {
+	return r == RoleViewer || r == RoleUser || r == RoleAdmin
+}
+
+// CanWrite reports whether the role may create or mutate its own resources
+// (i.e. submit feature requests). Viewers are read-only.
+func (r Role) CanWrite() bool {
+	return r == RoleUser || r == RoleAdmin
+}
+
 // User is a platform account.
 type User struct {
 	ID           string    `json:"id"`
 	OIDCSub      string    `json:"-"`
 	Email        string    `json:"email"`
 	Name         string    `json:"name"`
-	IsAdmin      bool      `json:"isAdmin"`
+	Role         Role      `json:"role"`
 	TokenVersion int       `json:"-"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
+
+// IsAdmin reports whether the user holds the admin role.
+func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
+
+// CanWrite reports whether the user may create or mutate their own resources.
+func (u User) CanWrite() bool { return u.Role.CanWrite() }
 
 // Repo is a GitHub repository users can target.
 type Repo struct {
@@ -72,17 +100,21 @@ func (s *Store) UpsertOIDCUser(ctx context.Context, sub, email, name string) (Us
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&count); err != nil {
 		return User{}, err
 	}
-	firstUser := count == 0
+	// The very first account bootstraps as admin; everyone else starts as a
+	// read-only viewer and must be promoted.
+	role := RoleViewer
+	if count == 0 {
+		role = RoleAdmin
+	}
 
-	var u User
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO users (oidc_sub, email, name, is_admin)
+	u, err := scanUser(tx.QueryRowContext(ctx, `
+		INSERT INTO users (oidc_sub, email, name, role)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (oidc_sub) DO UPDATE
 		  SET email = EXCLUDED.email, name = EXCLUDED.name
-		RETURNING id, oidc_sub, email, name, is_admin, token_version, created_at`,
-		sub, email, name, firstUser,
-	).Scan(&u.ID, &u.OIDCSub, &u.Email, &u.Name, &u.IsAdmin, &u.TokenVersion, &u.CreatedAt)
+		RETURNING `+userCols,
+		sub, email, name, string(role),
+	))
 	if err != nil {
 		return User{}, err
 	}
@@ -95,12 +127,14 @@ func (s *Store) UpsertOIDCUser(ctx context.Context, sub, email, name string) (Us
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var u User
 	var sub sql.NullString
-	err := row.Scan(&u.ID, &sub, &u.Email, &u.Name, &u.IsAdmin, &u.TokenVersion, &u.CreatedAt)
+	var role string
+	err := row.Scan(&u.ID, &sub, &u.Email, &u.Name, &role, &u.TokenVersion, &u.CreatedAt)
 	u.OIDCSub = sub.String
+	u.Role = Role(role)
 	return u, err
 }
 
-const userCols = `id, oidc_sub, email, name, is_admin, token_version, created_at`
+const userCols = `id, oidc_sub, email, name, role, token_version, created_at`
 
 // UserByID resolves a user by primary key.
 func (s *Store) UserByID(ctx context.Context, id string) (User, error) {
@@ -132,17 +166,17 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 // CountAdmins returns how many admins exist.
 func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	var n int
-	err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM users WHERE is_admin`).Scan(&n)
+	err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM users WHERE role = 'admin'`).Scan(&n)
 	return n, err
 }
 
-// SetAdmin grants or revokes admin and bumps token_version so existing sessions
-// re-resolve their privileges. Returns the updated user.
-func (s *Store) SetAdmin(ctx context.Context, id string, admin bool) (User, error) {
+// SetRole changes a user's role and bumps token_version so existing sessions
+// re-resolve their privileges on the next request. Returns the updated user.
+func (s *Store) SetRole(ctx context.Context, id string, role Role) (User, error) {
 	u, err := scanUser(s.DB.QueryRowContext(ctx, `
-		UPDATE users SET is_admin = $2, token_version = token_version + 1
+		UPDATE users SET role = $2, token_version = token_version + 1
 		WHERE id = $1
-		RETURNING `+userCols, id, admin))
+		RETURNING `+userCols, id, string(role)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}

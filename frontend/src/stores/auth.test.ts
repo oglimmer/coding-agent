@@ -16,14 +16,32 @@ describe('useAuthStore', () => {
     const auth = useAuthStore()
     expect(auth.isAuthenticated).toBe(false)
     expect(auth.isAdmin).toBe(false)
+    expect(auth.canWrite).toBe(false)
+  })
+
+  it('treats a viewer as read-only', () => {
+    const auth = useAuthStore()
+    const token = makeJwt(Math.floor(Date.now() / 1000) + 3600)
+    auth.setSession(token, { id: '2', email: 'v@b.c', name: 'V', role: 'viewer', createdAt: '' })
+    expect(auth.isAdmin).toBe(false)
+    expect(auth.canWrite).toBe(false)
+  })
+
+  it('treats a user as a writer but not admin', () => {
+    const auth = useAuthStore()
+    const token = makeJwt(Math.floor(Date.now() / 1000) + 3600)
+    auth.setSession(token, { id: '3', email: 'u@b.c', name: 'U', role: 'user', createdAt: '' })
+    expect(auth.isAdmin).toBe(false)
+    expect(auth.canWrite).toBe(true)
   })
 
   it('sets and persists a session', () => {
     const auth = useAuthStore()
     const token = makeJwt(Math.floor(Date.now() / 1000) + 3600)
-    auth.setSession(token, { id: '1', email: 'a@b.c', name: 'A', isAdmin: true, createdAt: '' })
+    auth.setSession(token, { id: '1', email: 'a@b.c', name: 'A', role: 'admin', createdAt: '' })
     expect(auth.isAuthenticated).toBe(true)
     expect(auth.isAdmin).toBe(true)
+    expect(auth.canWrite).toBe(true)
     expect(localStorage.getItem('token')).toBe(token)
   })
 

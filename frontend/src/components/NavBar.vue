@@ -18,7 +18,7 @@ function logout() {
       <RouterLink to="/repos" class="brand">⚙️ Coding Agent</RouterLink>
       <nav class="links">
         <RouterLink to="/repos">Repositories</RouterLink>
-        <RouterLink to="/new">New request</RouterLink>
+        <RouterLink v-if="auth.canWrite" to="/new">New request</RouterLink>
         <RouterLink to="/jobs">Jobs</RouterLink>
         <RouterLink v-if="auth.isAdmin" to="/admin">Admin</RouterLink>
       </nav>

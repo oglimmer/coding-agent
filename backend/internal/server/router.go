@@ -62,14 +62,20 @@ func NewRouter(a *App) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(a.authMiddleware)
 
+			// Read surface — available to every authenticated user, viewers
+			// included.
 			r.Get("/me", a.handleMe)
-
 			r.Get("/repos", a.handleListRepos)
-
 			r.Get("/jobs", a.handleListJobs)
-			r.Post("/jobs", a.handleCreateJob)
 			r.Get("/jobs/{id}", a.handleGetJob)
-			r.Delete("/jobs/{id}", a.handleDeleteJob)
+
+			// Write surface — users and admins only; viewers are read-only.
+			r.Group(func(r chi.Router) {
+				r.Use(a.requireWriterMiddleware)
+
+				r.Post("/jobs", a.handleCreateJob)
+				r.Delete("/jobs/{id}", a.handleDeleteJob)
+			})
 
 			// Admin-only.
 			r.Group(func(r chi.Router) {
@@ -79,8 +85,7 @@ func NewRouter(a *App) http.Handler {
 				r.Delete("/repos/{id}", a.handleDeleteRepo)
 
 				r.Get("/admin/users", a.handleListUsers)
-				r.Put("/admin/users/{id}/admin", a.handleGrantAdmin)
-				r.Delete("/admin/users/{id}/admin", a.handleRevokeAdmin)
+				r.Put("/admin/users/{id}/role", a.handleSetUserRole)
 			})
 		})
 	})

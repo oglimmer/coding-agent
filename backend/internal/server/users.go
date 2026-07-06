@@ -19,18 +19,23 @@ func (a *App) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, users)
 }
 
-// handleGrantAdmin promotes a user to admin (admin only).
-func (a *App) handleGrantAdmin(w http.ResponseWriter, r *http.Request) {
-	a.setAdmin(w, r, true)
-}
-
-// handleRevokeAdmin demotes a user, refusing to remove the last admin.
-func (a *App) handleRevokeAdmin(w http.ResponseWriter, r *http.Request) {
-	a.setAdmin(w, r, false)
-}
-
-func (a *App) setAdmin(w http.ResponseWriter, r *http.Request, admin bool) {
+// handleSetUserRole changes a user's role (admin only). It refuses to demote the
+// last remaining admin so the platform can never be locked out.
+func (a *App) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+
+	var req struct {
+		Role Role `json:"role"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !req.Role.Valid() {
+		writeErr(w, http.StatusBadRequest, "role must be one of: viewer, user, admin")
+		return
+	}
+
 	target, err := a.Store.UserByID(r.Context(), id)
 	if err != nil {
 		if err == ErrNotFound {
@@ -41,20 +46,25 @@ func (a *App) setAdmin(w http.ResponseWriter, r *http.Request, admin bool) {
 		return
 	}
 
-	if !admin && target.IsAdmin {
+	// Guard the last admin from being demoted out of existence.
+	if target.IsAdmin() && req.Role != RoleAdmin {
 		count, err := a.Store.CountAdmins(r.Context())
 		if err != nil {
 			a.serverErr(w, r, err, "")
 			return
 		}
 		if count <= 1 {
-			writeErr(w, http.StatusConflict, "cannot remove the last admin")
+			writeErr(w, http.StatusConflict, "cannot demote the last admin")
 			return
 		}
 	}
 
-	updated, err := a.Store.SetAdmin(r.Context(), id, admin)
+	updated, err := a.Store.SetRole(r.Context(), id, req.Role)
 	if err != nil {
+		if err == ErrNotFound {
+			writeErr(w, http.StatusNotFound, "user not found")
+			return
+		}
 		a.serverErr(w, r, err, "")
 		return
 	}

@@ -6,6 +6,7 @@ declare module 'vue-router' {
   interface RouteMeta {
     requiresAuth?: boolean
     requiresAdmin?: boolean
+    requiresWrite?: boolean
     hideChrome?: boolean
   }
 }
@@ -21,12 +22,12 @@ const router = createRouter({
       meta: { hideChrome: true },
     },
     { path: '/repos', component: () => import('@/views/ReposView.vue'), meta: { requiresAuth: true } },
-    { path: '/new', component: () => import('@/views/NewJobView.vue'), meta: { requiresAuth: true } },
+    { path: '/new', component: () => import('@/views/NewJobView.vue'), meta: { requiresAuth: true, requiresWrite: true } },
     {
       path: '/new/:repoId',
       component: () => import('@/views/NewJobView.vue'),
       props: true,
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, requiresWrite: true },
     },
     { path: '/jobs', component: () => import('@/views/JobsView.vue'), meta: { requiresAuth: true } },
     {
@@ -66,6 +67,9 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.requiresAdmin && !auth.isAdmin) {
+    return { path: '/error', query: { code: '403' } }
+  }
+  if (to.meta.requiresWrite && !auth.canWrite) {
     return { path: '/error', query: { code: '403' } }
   }
   return true
