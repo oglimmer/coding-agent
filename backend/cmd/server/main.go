@@ -58,6 +58,7 @@ func main() {
 		GitHubBotLogin:    cfg.GitHubBotLogin,
 		ReviewMaxRounds:   cfg.ReviewMaxRounds,
 		ActiveDeadlineSec: int64(cfg.JobTimeout.Seconds()),
+		AiderTimeoutSec:   cfg.AiderTimeoutSec,
 	})
 	if err != nil {
 		log.Printf("WARN k8s: cluster not available, worker jobs disabled: %v", err)

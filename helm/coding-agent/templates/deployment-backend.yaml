@@ -81,6 +81,8 @@ spec:
               value: {{ .Values.worker.githubBotLogin | quote }}
             - name: REVIEW_MAX_ROUNDS
               value: {{ .Values.worker.reviewMaxRounds | quote }}
+            - name: AIDER_TIMEOUT
+              value: {{ .Values.worker.aiderTimeout | quote }}
             - name: JOB_TIMEOUT
               value: {{ .Values.worker.jobTimeout | quote }}
             - name: JOB_COOLDOWN

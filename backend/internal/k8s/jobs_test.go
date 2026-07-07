@@ -21,6 +21,7 @@ func TestBuildJob(t *testing.T) {
 		GitHubBotLogin:    "coding-agent-bot",
 		ReviewMaxRounds:   3,
 		ActiveDeadlineSec: 5400,
+		AiderTimeoutSec:   3600,
 	}
 
 	job := BuildJob(spec, opts)
@@ -68,6 +69,9 @@ func TestBuildJob(t *testing.T) {
 	}
 	if env["REVIEW_MAX_ROUNDS"] != "3" {
 		t.Errorf("REVIEW_MAX_ROUNDS = %q", env["REVIEW_MAX_ROUNDS"])
+	}
+	if env["AIDER_TIMEOUT"] != "3600" {
+		t.Errorf("AIDER_TIMEOUT = %q", env["AIDER_TIMEOUT"])
 	}
 	if secretKeys["DEEPSEEK_API_KEY"] != "DEEPSEEK_API_KEY" {
 		t.Errorf("DEEPSEEK_API_KEY should come from secret, got %+v", secretKeys)

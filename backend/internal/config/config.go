@@ -64,6 +64,7 @@ type Config struct {
 	JobCooldown           time.Duration
 	MaxConcurrentJobs     int
 	ReviewMaxRounds       int
+	AiderTimeoutSec       int // seconds per aider round before it is killed
 	WatchInterval         time.Duration
 }
 
@@ -102,10 +103,11 @@ func Load() Config {
 		WorkerImagePullSecret: os.Getenv("WORKER_IMAGE_PULL_SECRET"),
 		WorkerServiceAccount:  os.Getenv("WORKER_SERVICE_ACCOUNT"),
 		GitHubBotLogin:        getenv("GITHUB_BOT_LOGIN", "coding-agent-bot"),
-		JobTimeout:            parseDuration("JOB_TIMEOUT", 90*time.Minute),
+		JobTimeout:            parseDuration("JOB_TIMEOUT", 120*time.Minute),
 		JobCooldown:           parseDuration("JOB_COOLDOWN", 5*time.Minute),
 		MaxConcurrentJobs:     parseInt("MAX_CONCURRENT_JOBS", 3),
 		ReviewMaxRounds:       parseInt("REVIEW_MAX_ROUNDS", 3),
+		AiderTimeoutSec:       parseInt("AIDER_TIMEOUT", 3600),
 		WatchInterval:         parseDuration("WATCH_INTERVAL", 20*time.Second),
 	}
 

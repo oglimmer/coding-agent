@@ -51,7 +51,10 @@ worker:
   # Reviewer login the worker treats as "self" when waiting for the PR review.
   githubBotLogin: "coding-agent-bot"
   reviewMaxRounds: 3
-  jobTimeout: "90m"
+  # Seconds a single aider round (plan+edit, or a review-fix round) may run before
+  # it is killed. A whole job runs several rounds, so keep jobTimeout well above this.
+  aiderTimeout: 3600
+  jobTimeout: "120m"
   jobCooldown: "5m"
   maxConcurrentJobs: 3
 

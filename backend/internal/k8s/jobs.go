@@ -52,6 +52,7 @@ type Options struct {
 	GitHubBotLogin    string
 	ReviewMaxRounds   int
 	ActiveDeadlineSec int64
+	AiderTimeoutSec   int // seconds per aider round before it is killed
 }
 
 // Result is the parsed worker outcome.
@@ -144,6 +145,7 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		{Name: "DEEPSEEK_BASE_URL", Value: opts.DeepSeekBaseURL},
 		{Name: "GITHUB_BOT_LOGIN", Value: opts.GitHubBotLogin},
 		{Name: "REVIEW_MAX_ROUNDS", Value: fmt.Sprintf("%d", opts.ReviewMaxRounds)},
+		{Name: "AIDER_TIMEOUT", Value: fmt.Sprintf("%d", opts.AiderTimeoutSec)},
 		{Name: "DEEPSEEK_API_KEY", ValueFrom: secretRef("DEEPSEEK_API_KEY")},
 		{Name: "GITHUB_TOKEN", ValueFrom: secretRef("WORKER_GITHUB_TOKEN")},
 	}

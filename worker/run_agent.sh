@@ -27,7 +27,7 @@
 #   DEEPSEEK_BASE_URL   helper-call API base (default: https://api.deepseek.com)
 #   REVIEW_JUDGE_MODEL  model for scoping/self-review/review-judging (default: deepseek-chat)
 #   SELF_REVIEW_ROUNDS  pre-PR corrective rounds, default: 2
-#   AIDER_TIMEOUT       seconds per aider round before it is killed (default: 1800)
+#   AIDER_TIMEOUT       seconds per aider round before it is killed (default: 3600)
 #   AIDER_TEMPERATURE   sampling temperature (default: 0.2 — DeepSeek loops at 0)
 #   AIDER_FREQUENCY_PENALTY  anti-repetition penalty (default: 0.3)
 set -uo pipefail
@@ -55,7 +55,7 @@ REVIEW_JUDGE_MODEL="${REVIEW_JUDGE_MODEL:-deepseek-chat}"
 SELF_REVIEW_ROUNDS="${SELF_REVIEW_ROUNDS:-2}"
 # Hard per-round bound: a model stuck in a repetition loop must not ride out the
 # whole Job deadline.
-AIDER_TIMEOUT="${AIDER_TIMEOUT:-1800}"
+AIDER_TIMEOUT="${AIDER_TIMEOUT:-3600}"
 # DeepSeek degenerates into verbatim repetition loops at temperature 0 (aider's
 # default) on long generations; a little temperature + frequency penalty is the
 # standard countermeasure.
