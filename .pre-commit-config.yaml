@@ -1,32 +1,139 @@
+---
+# Pre-commit hooks for coding-agent.
+#
+#   pre-commit install --install-hooks            # enable commit-stage hooks
+#   pre-commit install --hook-type pre-push       # enable the build/test gate
+#   pre-commit run --all-files                    # run everything on demand
+#
+# Design: fast, auto-fixing checks run on `commit` (mirroring the cheap half of
+# .github/workflows/ci.yml); the slow build/test gates run on `pre-push` so they
+# don't tax every commit. Project toolchain hooks (go, npm, helm) are `local`
+# so they use this repo's exact config; generic/hygiene hooks come from pinned
+# upstream repos so contributors don't need every tool installed.
+
+default_install_hook_types: [pre-commit, pre-push]
+
+# Generated/tool-managed and binary files that text-munging hooks must not touch.
+exclude: |
+  (?x)^(
+    .*\.(png|jpe?g|gif|ico|woff2?|ttf|eot)$|
+    frontend/package-lock\.json$|
+    backend/go\.sum$
+  )$
+
 repos:
+  # ---- generic hygiene (all files) --------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: check-json
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        # Helm templates are Go-templated, not valid YAML; helm lint covers them.
+        exclude: ^helm/coding-agent/templates/
+
+  # ---- YAML lint --------------------------------------------------------
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [--strict, -c, .yamllint.yaml]
+        exclude: ^helm/coding-agent/templates/
+
+  # ---- GitHub Actions workflows ----------------------------------------
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      # actionlint shells out to shellcheck for `run:` blocks when present.
+      - id: actionlint
+
+  # ---- shell scripts ----------------------------------------------------
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  # ---- secret scan (defence in depth alongside detect-private-key) ------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # ---- project toolchain (local) ---------------------------------------
   - repo: local
     hooks:
+      # ---- Go backend --------------------------------------------------
       - id: gofmt
-        name: gofmt
-        entry: bash -c 'cd backend && test -z "$(gofmt -l .)"'
+        name: gofmt (backend)
+        # Plain gofmt (no -s) to match ci.yml's `gofmt -l` gate exactly. -w
+        # rewrites in place; pre-commit fails the commit if a file changed, so
+        # you re-stage the already-formatted code.
+        entry: gofmt -w
         language: system
-        files: '^backend/.*\.go$'
-        pass_filenames: false
+        files: ^backend/.*\.go$
+
       - id: go-vet
-        name: go vet
+        name: go vet (backend)
         entry: bash -c 'cd backend && go vet ./...'
         language: system
-        files: '^backend/.*\.go$'
+        files: ^backend/.*\.go$
         pass_filenames: false
+
+      # Slow gates — only on push.
+      - id: go-build
+        name: go build (backend)
+        entry: bash -c 'cd backend && go build ./...'
+        language: system
+        files: ^backend/.*\.go$
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: go-test
+        name: go test (backend)
+        entry: bash -c 'cd backend && go test -race ./...'
+        language: system
+        files: ^backend/.*\.go$
+        pass_filenames: false
+        stages: [pre-push]
+
+      # ---- Vue/TS frontend ---------------------------------------------
       - id: eslint
-        name: eslint
-        entry: bash -c 'cd frontend && npx eslint .'
+        name: eslint --fix (frontend)
+        entry: bash -c 'cd frontend && npx eslint . --fix'
         language: system
-        files: '^frontend/src/.*\.(ts|vue)$'
+        files: ^frontend/src/.*\.(ts|tsx|js|jsx|vue)$
         pass_filenames: false
-      - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
+
+      - id: vue-tsc
+        name: typecheck (frontend)
+        entry: bash -c 'cd frontend && npm run typecheck'
         language: system
-        files: '\.sh$'
+        files: ^frontend/.*\.(ts|tsx|vue)$
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: vitest
+        name: vitest (frontend)
+        entry: bash -c 'cd frontend && npm run test'
+        language: system
+        files: ^frontend/.*\.(ts|tsx|vue)$
+        pass_filenames: false
+        stages: [pre-push]
+
+      # ---- Helm chart --------------------------------------------------
       - id: helm-lint
         name: helm lint
         entry: helm lint helm/coding-agent
         language: system
-        files: '^helm/'
+        files: ^helm/coding-agent/
         pass_filenames: false

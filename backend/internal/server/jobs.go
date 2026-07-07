@@ -146,13 +146,14 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	// --- spawn the worker Job ---
 	suffix := randomSuffix()
 	spec := k8s.JobSpec{
-		JobName:    "coding-agent-" + suffix,
-		Repo:       repo.FullName(),
-		BaseBranch: repo.BaseBranch,
-		Branch:     fmt.Sprintf("agent/%s-%s", suffix, sanitizeSlug(req.Feature, 30)),
-		Prompt:     buildPrompt(repo.FullName(), u.Name, req.Feature),
-		Feature:    req.Feature,
-		PRTitle:    "feat: " + truncate(req.Feature, 60),
+		JobName:       "coding-agent-" + suffix,
+		Repo:          repo.FullName(),
+		BaseBranch:    repo.BaseBranch,
+		Branch:        fmt.Sprintf("agent/%s-%s", suffix, sanitizeSlug(req.Feature, 30)),
+		Prompt:        buildPrompt(repo.FullName(), u.Name, req.Feature),
+		Feature:       req.Feature,
+		PRTitle:       "feat: " + truncate(req.Feature, 60),
+		VerifyCommand: repo.VerifyCommand,
 	}
 	if err := a.K8s.Create(r.Context(), spec); err != nil {
 		reason := "failed to start the worker job"

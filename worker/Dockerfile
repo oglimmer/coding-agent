@@ -30,6 +30,12 @@ RUN python -m venv /opt/aider && \
     /opt/aider/bin/pip install --no-cache-dir aider-chat && \
     ln -s /opt/aider/bin/aider /usr/local/bin/aider
 
+# pre-commit (own venv) so the pre-PR verify gate can run a target repo's
+# .pre-commit-config.yaml hooks locally before opening a PR.
+RUN python -m venv /opt/precommit && \
+    /opt/precommit/bin/pip install --no-cache-dir pre-commit && \
+    ln -s /opt/precommit/bin/pre-commit /usr/local/bin/pre-commit
+
 RUN useradd --uid 1000 --create-home worker && \
     mkdir -p /work && chown worker:worker /work
 

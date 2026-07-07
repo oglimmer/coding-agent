@@ -29,13 +29,14 @@ const inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/na
 
 // JobSpec is everything the worker needs to run one feature request.
 type JobSpec struct {
-	JobName    string
-	Repo       string // "owner/name"
-	BaseBranch string
-	Branch     string
-	Prompt     string
-	Feature    string
-	PRTitle    string
+	JobName       string
+	Repo          string // "owner/name"
+	BaseBranch    string
+	Branch        string
+	Prompt        string
+	Feature       string
+	PRTitle       string
+	VerifyCommand string // repo's build/lint/test gate; empty = worker guesses one
 }
 
 // Options configure how Jobs are built (image, secrets, resource wiring).
@@ -140,6 +141,7 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		{Name: "AGENT_PROMPT", Value: spec.Prompt},
 		{Name: "AGENT_FEATURE", Value: spec.Feature},
 		{Name: "AGENT_PR_TITLE", Value: spec.PRTitle},
+		{Name: "AGENT_VERIFY_CMD", Value: spec.VerifyCommand},
 		{Name: "AIDER_MODEL", Value: opts.Model},
 		{Name: "AIDER_EDITOR_MODEL", Value: opts.EditorModel},
 		{Name: "DEEPSEEK_BASE_URL", Value: opts.DeepSeekBaseURL},

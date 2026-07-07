@@ -13,6 +13,7 @@ export interface Repo {
   owner: string
   name: string
   baseBranch: string
+  verifyCommand?: string
   addedBy?: string
   createdAt: string
 }

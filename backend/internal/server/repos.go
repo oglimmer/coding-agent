@@ -27,9 +27,10 @@ func (a *App) handleListRepos(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFromContext(r.Context())
 	var req struct {
-		Owner      string `json:"owner"`
-		Name       string `json:"name"`
-		BaseBranch string `json:"baseBranch"`
+		Owner         string `json:"owner"`
+		Name          string `json:"name"`
+		BaseBranch    string `json:"baseBranch"`
+		VerifyCommand string `json:"verifyCommand"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
@@ -38,6 +39,7 @@ func (a *App) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	req.Owner = strings.TrimSpace(req.Owner)
 	req.Name = strings.TrimSpace(req.Name)
 	req.BaseBranch = strings.TrimSpace(req.BaseBranch)
+	req.VerifyCommand = strings.TrimSpace(req.VerifyCommand)
 
 	// Accept "owner/name" pasted into the owner field for convenience.
 	if req.Name == "" && strings.Contains(req.Owner, "/") {
@@ -49,7 +51,7 @@ func (a *App) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, err := a.Store.CreateRepo(r.Context(), req.Owner, req.Name, req.BaseBranch, u.ID)
+	repo, err := a.Store.CreateRepo(r.Context(), req.Owner, req.Name, req.BaseBranch, req.VerifyCommand, u.ID)
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "that repository is already configured")

@@ -15,6 +15,7 @@ const { data: repos, loading, error, reload } = useAsyncData<Repo[]>(() => api.l
 const owner = ref('')
 const name = ref('')
 const baseBranch = ref('main')
+const verifyCommand = ref('')
 const formError = ref<string | null>(null)
 const submitting = ref(false)
 
@@ -22,10 +23,16 @@ async function addRepo() {
   submitting.value = true
   formError.value = null
   try {
-    await api.createRepo(owner.value.trim(), name.value.trim(), baseBranch.value.trim() || 'main')
+    await api.createRepo(
+      owner.value.trim(),
+      name.value.trim(),
+      baseBranch.value.trim() || 'main',
+      verifyCommand.value.trim(),
+    )
     owner.value = ''
     name.value = ''
     baseBranch.value = 'main'
+    verifyCommand.value = ''
     await reload()
   } catch (e) {
     formError.value = errMsg(e)
@@ -78,6 +85,19 @@ function requestFeature(repo: Repo) {
           <input id="b" v-model="baseBranch" class="input" placeholder="main">
         </div>
         <button class="btn btn-primary" :disabled="submitting || !owner" type="submit">Add</button>
+        <div class="f wide">
+          <label class="label" for="v">Verify command <span class="muted">(optional)</span></label>
+          <input
+            id="v"
+            v-model="verifyCommand"
+            class="input"
+            placeholder="npm run lint && npm run build && npm test"
+          >
+          <p class="hint">
+            The build/lint/test command the agent must pass locally before opening a PR —
+            use the same one your CI runs. Leave empty to let the agent guess.
+          </p>
+        </div>
       </form>
       <p v-if="formError" class="error-banner" style="margin-top: 0.75rem">{{ formError }}</p>
 
@@ -94,6 +114,12 @@ function requestFeature(repo: Repo) {
             review — the agent merges through the API, and the AI reviewer only comments.
           </li>
           <li><strong>Squash merging is enabled</strong> in the repository settings.</li>
+          <li>
+            Set the <strong>verify command</strong> above to the same build/lint/test
+            command your CI runs — the agent runs it (and any <code>.pre-commit-config.yaml</code>
+            hooks) locally and fixes failures before opening a PR, so a red CI check
+            never wastes a review round.
+          </li>
           <li>
             The AI review workflow (<code>oglimmer/review-action</code>) is installed with an
             <code>OPENAI_API_KEY</code> secret — jobs wait for its review and time out without it.
@@ -177,6 +203,14 @@ function requestFeature(repo: Repo) {
 }
 .f.narrow {
   flex: 0 0 130px;
+}
+.f.wide {
+  flex: 0 0 100%;
+}
+.hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted, #6b7280);
 }
 .list {
   list-style: none;

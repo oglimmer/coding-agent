@@ -15,6 +15,9 @@
 # Optional env:
 #   AGENT_BASE_BRANCH   default: main
 #   AGENT_FEATURE       raw feature text (for the PR body / self-review)
+#   AGENT_VERIFY_CMD    repo's build/lint/test command; run as a hard gate before
+#                       the PR (falls back to the model-guessed test command)
+#   VERIFY_MAX_ROUNDS   corrective aider rounds for the verify gate (default: 2)
 #   AIDER_MODEL         architect (planning) model, default: deepseek/deepseek-v4-pro
 #   AIDER_EDITOR_MODEL  editing model, default: deepseek/deepseek-chat
 #   AIDER_MAP_TOKENS    repo-map budget, default: 4096
@@ -61,6 +64,11 @@ AIDER_TIMEOUT="${AIDER_TIMEOUT:-3600}"
 # standard countermeasure.
 AIDER_TEMPERATURE="${AIDER_TEMPERATURE:-0.2}"
 AIDER_FREQUENCY_PENALTY="${AIDER_FREQUENCY_PENALTY:-0.3}"
+# Authoritative pre-PR verification: the repo's real build/lint/test command (the
+# same one CI runs). Empty falls back to the model-guessed SCOPE_TEST_CMD so the
+# final diff is still checked once before the PR even for unconfigured repos.
+VERIFY_CMD="${AGENT_VERIFY_CMD:-}"
+VERIFY_MAX_ROUNDS="${VERIFY_MAX_ROUNDS:-2}"
 REPO_DIR=/work/repo
 API="https://api.github.com/repos/${AGENT_REPO:-}"
 
@@ -323,7 +331,7 @@ self_review() {
   SELF_CRITIQUE=""
   local diff sys user content json
   diff=$(git diff "origin/${BASE_BRANCH}..HEAD" | head -c 60000)
-  sys='You are a strict code reviewer. Given a feature request and the full diff of an automated agent'"'"'s change, judge ONLY whether the diff actually implements the requested feature in the right place, with at least one meaningful automated test. Reply with ONLY a compact JSON object: {"implements":true|false,"critique":"<short: what is missing or wrong, and where the change should have been made>"}. Answer false if the diff changes unrelated code instead of the requested behaviour, only partially implements it, or tests are missing/meaningless.'
+  sys='You are a strict code reviewer. Given a feature request and the full diff of an automated agent'"'"'s change, judge whether the diff is ready to open as a pull request. Reply with ONLY a compact JSON object: {"implements":true|false,"critique":"<short: what is wrong and WHERE — name the two places that disagree>"}. Answer false if ANY of these hold: (a) the diff does not implement the requested behaviour in the right place, or changes unrelated code, or only partially implements it; (b) there is no meaningful automated test, OR the test does not exercise the real production code path it claims to (e.g. it re-implements the logic inline or asserts on a fixture instead of calling the actual function/endpoint) — a test that would still pass if the production change were reverted does not count; (c) the change spans layers whose contract is now inconsistent — for example the frontend reads field names the backend does not serialize (or vice versa), an API caller and its handler disagree on the request/response shape, or a constant/enum is consumed with a value the other side never produces. When unsure, answer false and say which two places to reconcile.'
   user=$(printf 'FEATURE REQUEST:\n%s\n\nDIFF:\n%s\n' \
     "${AGENT_FEATURE:-$AGENT_PROMPT}" "$diff")
   content=$(deepseek_call "$sys" "$user") || return 0
@@ -359,6 +367,89 @@ while [ "$self_round" -lt "$SELF_REVIEW_ROUNDS" ]; do
   run_aider /work/self-review.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} \
     || fail "aider self-review fix run failed"
 done
+
+# --- pre-PR verification gate --------------------------------------------------
+# The authoritative local gate. Runs the repo's real build/lint/test command (the
+# same one CI runs) plus its pre-commit hooks BEFORE the PR opens. A lint error or
+# build break caught here becomes a cheap local fix round; the alternative is a
+# failed CI check that blocks merge and burns review rounds. If the code cannot be
+# made green in VERIFY_MAX_ROUNDS rounds we FAIL the job and open no PR — shipping a
+# red PR that can never merge is strictly worse.
+#
+# The effective command is the repo-configured VERIFY_CMD, falling back to the
+# model-guessed SCOPE_TEST_CMD (already baseline-green) so even unconfigured repos
+# get one final check of the pushed diff.
+EFFECTIVE_VERIFY="${VERIFY_CMD:-$SCOPE_TEST_CMD}"
+
+have_precommit() {
+  [ -f .pre-commit-config.yaml ] && command -v pre-commit >/dev/null 2>&1
+}
+
+# Run every configured verification step; combined output -> /work/verify.log.
+# Returns non-zero if any step fails.
+run_verify() {
+  : > /work/verify.log
+  local rc=0
+  if have_precommit; then
+    local changed=()
+    mapfile -t changed < <(git diff --name-only "origin/${BASE_BRANCH}..HEAD")
+    if [ "${#changed[@]}" -gt 0 ]; then
+      echo "=== pre-commit run (changed files) ===" | tee -a /work/verify.log
+      pre-commit run --files "${changed[@]}" >>/work/verify.log 2>&1 || rc=$?
+    fi
+  fi
+  if [ -n "$EFFECTIVE_VERIFY" ]; then
+    echo "=== verify: ${EFFECTIVE_VERIFY} ===" | tee -a /work/verify.log
+    bash -c "$EFFECTIVE_VERIFY" >>/work/verify.log 2>&1 || rc=$?
+  fi
+  return $rc
+}
+
+# One verification attempt. Auto-fixing hooks (formatters, eslint --fix) commonly
+# rewrite files and still exit non-zero on the same run; commit those and re-check
+# once for free before spending an aider round on them.
+verify_once() {
+  run_verify && return 0
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "=== verify auto-fixed files; committing and re-checking ==="
+    git add -A
+    git commit -m "chore: apply verify auto-fixes" --no-verify >/dev/null 2>&1 || true
+    run_verify && return 0
+  fi
+  return 1
+}
+
+verify_gate() {
+  if [ -z "$EFFECTIVE_VERIFY" ] && ! have_precommit; then
+    echo "=== no verify command or pre-commit config; skipping local gate ==="
+    return 0
+  fi
+  echo "=== pre-PR verification gate (cmd='${EFFECTIVE_VERIFY:-none}', precommit=$(have_precommit && echo yes || echo no)) ==="
+  verify_once && { echo "=== local verification passed ==="; return 0; }
+  local vround=0
+  while [ "$vround" -lt "$VERIFY_MAX_ROUNDS" ]; do
+    vround=$((vround + 1))
+    echo "=== verification failing; handing to aider (round ${vround}/${VERIFY_MAX_ROUNDS}) ==="
+    {
+      echo "Your change FAILS the repository's local verification — the same build/lint/"
+      echo "test checks CI runs. Fix every failure below. Keep the feature and its tests"
+      echo "intact and do not introduce unrelated changes. Command output:"
+      echo
+      tail -c 12000 /work/verify.log
+    } > /work/verify-findings.txt
+    mapfile -t ROUND_FILES < <(branch_files)
+    run_aider /work/verify-findings.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} \
+      || fail "aider verify-fix run failed"
+    verify_once && { echo "=== local verification passed after fix round ${vround} ==="; return 0; }
+  done
+  echo "=== local verification still failing after ${VERIFY_MAX_ROUNDS} round(s) ==="
+  tail -40 /work/verify.log
+  return 1
+}
+
+if ! verify_gate; then
+  fail "local verification (build/lint/test) still failing after ${VERIFY_MAX_ROUNDS} fix round(s); no PR opened"
+fi
 
 echo "=== pushing branch ${AGENT_BRANCH} ==="
 git push origin "$AGENT_BRANCH" || fail "git push failed"
