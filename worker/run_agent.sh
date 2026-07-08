@@ -84,19 +84,45 @@ fail() {
 }
 
 gh_api() {
-  # gh_api METHOD URL [DATA]
+  # gh_api METHOD URL [DATA] — echoes the response body. Returns non-zero on a
+  # network error or an HTTP status >= 400, so callers can tell a real failure
+  # from an empty-but-valid result (a rate-limited poll must NOT read as "no
+  # checks"). Idempotent GETs are retried a couple of times on 429/5xx/network.
   local method="$1" url="$2" data="${3:-}"
-  if [ -n "$data" ]; then
-    curl -sS -X "$method" \
-      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      "$url" -d "$data"
-  else
-    curl -sS -X "$method" \
-      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      "$url"
-  fi
+  local attempt=0 resp curl_rc code body
+  while :; do
+    attempt=$((attempt + 1))
+    if [ -n "$data" ]; then
+      resp=$(curl -sS --max-time 60 -w $'\n%{http_code}' -X "$method" \
+        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        "$url" -d "$data")
+    else
+      resp=$(curl -sS --max-time 60 -w $'\n%{http_code}' -X "$method" \
+        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        "$url")
+    fi
+    curl_rc=$?
+    # GitHub REST bodies are single-line JSON; %{http_code} follows our literal
+    # newline, so split on the last newline regardless of body content.
+    code="${resp##*$'\n'}"
+    body="${resp%$'\n'*}"
+    if [ "$curl_rc" -ne 0 ]; then
+      [ "$method" = GET ] && [ "$attempt" -lt 3 ] && { sleep 5; continue; }
+      echo "WARN gh_api ${method} network error (curl rc=${curl_rc})" >&2
+      printf '%s' "$body"; return 1
+    fi
+    if [ "${code:-0}" -ge 400 ] 2>/dev/null; then
+      if [ "$method" = GET ] && [ "$attempt" -lt 3 ] \
+         && { [ "$code" = 429 ] || [ "$code" -ge 500 ]; }; then
+        sleep 5; continue
+      fi
+      echo "WARN gh_api ${method} -> HTTP ${code}" >&2
+      printf '%s' "$body"; return 1
+    fi
+    printf '%s' "$body"; return 0
+  done
 }
 
 # deepseek_call SYSTEM USER — one-shot chat completion against the helper model;
@@ -201,24 +227,88 @@ scope_repo
 echo "=== scope: ${#SCOPE_FILES[@]} files, test_cmd='${SCOPE_TEST_CMD:-none}' ==="
 [ -n "$SCOPE_NOTES" ] && echo "=== scope notes: ${SCOPE_NOTES} ==="
 
-# The test command is only useful if it can actually run: install npm deps it
-# needs, then require it to PASS on the untouched branch. A command that fails
-# at baseline (missing deps, broken env) would send aider chasing phantom
-# failures instead of the feature — exactly the confusion spiral we must avoid.
+# The test command is only useful if it can actually run: install the deps every
+# stack it touches, then require it to PASS on the untouched branch. A command
+# that fails at baseline (missing deps, broken env, a hallucinated script name)
+# would send aider chasing phantom failures instead of the feature — exactly the
+# confusion spiral we must avoid.
+
+disable_auto_test() {
+  echo "=== ${1}; disabling auto-test ==="
+  SCOPE_TEST_CMD=""
+}
+
+# Install node deps in DIR when it has a package.json and no node_modules yet.
+prepare_npm_dir() {
+  local dir="$1"
+  [ -f "$dir/package.json" ] || return 0
+  [ -d "$dir/node_modules" ] && return 0
+  echo "=== installing npm deps in ${dir} ==="
+  ( cd "$dir" && { npm ci --no-audit --no-fund || npm install --no-audit --no-fund; } ) \
+    >/work/npm-install.log 2>&1 || { tail -5 /work/npm-install.log; return 1; }
+}
+
+# For an "npm run <script>" segment, confirm <script> is defined in DIR's
+# package.json. A hallucinated script name (job 226cfe38's `test:unit`) otherwise
+# only surfaces as a baseline failure that silently kills the whole auto-test loop.
+check_npm_script() {
+  local dir="$1" seg="$2" script
+  script=$(printf '%s' "$seg" | sed -n 's/.*npm run \([^ ]*\).*/\1/p')
+  [ -n "$script" ] || return 0
+  [ -f "$dir/package.json" ] || return 0
+  jq -e --arg s "$script" '.scripts[$s]' "$dir/package.json" >/dev/null 2>&1 && return 0
+  echo "=== npm script '${script}' is not defined in ${dir}/package.json ==="
+  return 1
+}
+
+# Create a single shared target venv (once) and install DIR's Python deps into it,
+# exporting it onto PATH so both the baseline run and aider's --test-cmd subprocess
+# use it. Runs in the current shell (via `< <(...)` below), so the export persists.
+TARGET_VENV=""
+prepare_python() {
+  local dir="$1"
+  if [ -z "$TARGET_VENV" ]; then
+    TARGET_VENV=/work/target-venv
+    python -m venv "$TARGET_VENV" >/work/py-install.log 2>&1 || return 1
+    export PATH="$TARGET_VENV/bin:$PATH"
+    pip install -q pytest >>/work/py-install.log 2>&1 || true
+  fi
+  if [ -f "$dir/requirements.txt" ]; then
+    pip install -q -r "$dir/requirements.txt" >>/work/py-install.log 2>&1 \
+      || { tail -5 /work/py-install.log; return 1; }
+  fi
+  [ -f "$dir/pyproject.toml" ] && pip install -q -e "$dir" >>/work/py-install.log 2>&1
+  return 0
+}
+
+# Walk CMD's &&-joined segments, tracking the working directory as `cd` segments
+# change, and prepare each stack the command actually touches. A cross-stack
+# command like "cd backend && go test ./... && cd ../frontend && npm run test:unit"
+# therefore gets BOTH stacks prepared, not just the first cd. Returns non-zero if a
+# required install failed or an npm script it names does not exist. Shared by the
+# auto-test prep and the verify-command baseline check.
+prepare_cmd_deps() {
+  local cmd="$1" seg tok dir="."
+  while IFS= read -r seg; do
+    seg="${seg#"${seg%%[![:space:]]*}"}"      # ltrim
+    tok="${seg%% *}"
+    case "$tok" in
+      cd)
+        local d="${seg#cd }"; d="${d%% *}"
+        [ -n "$d" ] && dir="$d" ;;
+      npm|npx|node)
+        prepare_npm_dir "$dir" || return 1
+        check_npm_script "$dir" "$seg" || return 1 ;;
+      python|python3|pytest)
+        prepare_python "$dir" || return 1 ;;
+    esac
+  done < <(printf '%s' "$cmd" | sed 's/&&/\n/g')
+  return 0
+}
+
 prepare_test_cmd() {
   [ -n "$SCOPE_TEST_CMD" ] || return 0
-  if printf '%s' "$SCOPE_TEST_CMD" | grep -qE '(^|&& *)(npm|npx|node) '; then
-    local dir="."
-    case "$SCOPE_TEST_CMD" in
-      "cd "*) dir=$(printf '%s' "$SCOPE_TEST_CMD" | sed -n 's/^cd \([^ ]*\) &&.*/\1/p'); [ -n "$dir" ] || dir="." ;;
-    esac
-    if [ -f "$dir/package.json" ] && [ ! -d "$dir/node_modules" ]; then
-      echo "=== installing npm deps in ${dir} ==="
-      ( cd "$dir" && { npm ci --no-audit --no-fund || npm install --no-audit --no-fund; } ) \
-        >/work/npm-install.log 2>&1 \
-        || { echo "=== npm install failed; disabling auto-test ==="; tail -5 /work/npm-install.log; SCOPE_TEST_CMD=""; return 0; }
-    fi
-  fi
+  prepare_cmd_deps "$SCOPE_TEST_CMD" || { disable_auto_test "test-command setup failed"; return 0; }
   echo "=== verifying test command on clean baseline ==="
   if bash -c "$SCOPE_TEST_CMD" >/work/baseline-test.log 2>&1; then
     echo "=== baseline green: auto-test enabled ==="
@@ -229,6 +319,56 @@ prepare_test_cmd() {
   fi
 }
 prepare_test_cmd
+
+# The repo-configured verify command is the authoritative pre-PR gate, but if it is
+# already RED on untouched main (broken config, missing tool, red base) aider can
+# never make it green — it would burn the whole run and every verify round for
+# nothing (this is still the clean baseline: aider has not run yet). Check it once
+# and fail fast with an actionable reason instead.
+if [ -n "$VERIFY_CMD" ]; then
+  echo "=== checking repo verify command on clean baseline: ${VERIFY_CMD} ==="
+  prepare_cmd_deps "$VERIFY_CMD" || true
+  if bash -c "$VERIFY_CMD" >/work/verify-baseline.log 2>&1; then
+    echo "=== verify command green at baseline ==="
+  else
+    echo "=== repo verify command is RED at baseline ==="
+    tail -20 /work/verify-baseline.log
+    fail "repo verify command (AGENT_VERIFY_CMD) fails on untouched ${BASE_BRANCH}; fix the repository's verify setting — not spending an agent run on it"
+  fi
+fi
+
+# When no usable test command survived, fall back to a zero-config compile/type
+# gate so aider still gets a syntax/type signal instead of coding blind — the
+# missing quality lever behind job 226cfe38's hour-long, no-feedback timeout. The
+# fallback is built from the repo's own stack (not model input) and must itself
+# pass at baseline, else we drop it and leave auto-test off (today's behaviour).
+derive_fallback_test_cmd() {
+  [ -z "$SCOPE_TEST_CMD" ] || return 0
+  local cand="" gomod pkg pdir
+  gomod=$(git ls-files | grep -E '(^|/)go\.mod$' | head -1)
+  if [ -n "$gomod" ] && command -v go >/dev/null 2>&1; then
+    local gdir; gdir=$(dirname "$gomod")
+    [ "$gdir" = "." ] && cand="go build ./... && go vet ./..." \
+                      || cand="cd $gdir && go build ./... && go vet ./..."
+  else
+    pkg=$(git ls-files | grep -E '(^|/)package\.json$' | grep -v node_modules | head -1)
+    if [ -n "$pkg" ] && jq -e '.scripts.build' "$pkg" >/dev/null 2>&1; then
+      pdir=$(dirname "$pkg")
+      [ "$pdir" = "." ] && cand="npm run build" || cand="cd $pdir && npm run build"
+      prepare_npm_dir "$pdir" || cand=""
+    fi
+  fi
+  [ -n "$cand" ] || return 0
+  echo "=== no test command; trying zero-config fallback gate: ${cand} ==="
+  if bash -c "$cand" >/work/fallback-test.log 2>&1; then
+    echo "=== fallback gate green: using it as the aider test loop ==="
+    SCOPE_TEST_CMD="$cand"
+  else
+    echo "=== fallback gate red at baseline; leaving auto-test disabled ==="
+    tail -5 /work/fallback-test.log
+  fi
+}
+derive_fallback_test_cmd
 
 # --- aider ---------------------------------------------------------------------
 # Per-model overrides: temperature + frequency penalty keep DeepSeek out of
@@ -285,6 +425,7 @@ run_aider() {
     --map-tokens "$AIDER_MAP_TOKENS" \
     --yes-always \
     --no-check-update \
+    --no-gitignore \
     --no-attribute-author \
     --no-attribute-committer \
     --message-file "$msg" \
@@ -298,6 +439,26 @@ run_aider() {
   return $rc
 }
 
+# Count of feature commits on the branch (i.e. work the model has actually
+# committed). Architect mode commits incrementally, so a killed round can still
+# have landed useful work.
+commit_count() {
+  git rev-list --count "origin/${BASE_BRANCH}..HEAD" 2>/dev/null || echo 0
+}
+
+# A corrective aider round that is ALLOWED to time out: rc 124 (killed mid-round)
+# is logged and swallowed so the surrounding gate can re-evaluate whatever got
+# committed instead of discarding the whole run. A genuine aider crash (any other
+# non-zero rc) still fails the job.
+run_aider_round() {
+  run_aider "$@"
+  local rc=$?
+  case "$rc" in
+    0|124) return 0 ;;
+    *) return "$rc" ;;
+  esac
+}
+
 echo "=== running aider (architect=${AIDER_MODEL}, editor=${AIDER_EDITOR_MODEL}) ==="
 {
   printf '%s' "$AGENT_PROMPT"
@@ -308,7 +469,22 @@ echo "=== running aider (architect=${AIDER_MODEL}, editor=${AIDER_EDITOR_MODEL})
     printf '\nThe change is validated with: %s\n' "$SCOPE_TEST_CMD"
   fi
 } > /work/prompt.txt
-run_aider /work/prompt.txt ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} || fail "aider run failed"
+# The main implementation round. A timeout here must NOT throw away work: architect
+# mode commits as it goes, so a round killed during a late reflection can already
+# hold the whole feature. On 124 we continue to the gates (which re-check
+# everything) as long as SOMETHING was committed; only a timeout with zero commits,
+# or a real aider crash, fails the job.
+run_aider /work/prompt.txt ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"}
+aider_rc=$?
+if [ "$aider_rc" -eq 124 ]; then
+  if [ "$(commit_count)" -gt 0 ]; then
+    echo "=== aider timed out but committed $(commit_count) commit(s); continuing to the gates ==="
+  else
+    fail "aider timed out before committing any work"
+  fi
+elif [ "$aider_rc" -ne 0 ]; then
+  fail "aider run failed (rc=${aider_rc})"
+fi
 
 # A change must ship a test (the prompt demands it). Repos are polyglot, so we
 # check common test path shapes rather than a language-specific test command.
@@ -326,12 +502,17 @@ were reverted. Match the repository's existing test framework and layout. Then
 make sure the project still builds.
 EOF
   mapfile -t ROUND_FILES < <(branch_files)
-  run_aider /work/test-required.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} \
+  run_aider_round /work/test-required.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} \
     || fail "aider test-adding run failed"
 fi
 
-if [ "$(git rev-list --count "origin/${BASE_BRANCH}..HEAD")" -eq 0 ]; then
-  fail "the coding agent made no commits"
+# Guard against a "no real work" run. --no-gitignore already suppresses aider's
+# ".aider* added to .gitignore" housekeeping commit; also reject a diff that
+# touched ONLY .gitignore, which would otherwise pass the raw commit count and
+# waste every downstream gate round.
+meaningful=$(git diff --name-only "origin/${BASE_BRANCH}..HEAD" | grep -vc '^\.gitignore$' || true)
+if [ "${meaningful:-0}" -eq 0 ]; then
+  fail "the coding agent made no meaningful commits"
 fi
 
 # --- pre-PR self-review ----------------------------------------------------------
@@ -344,9 +525,21 @@ self_review() {
   SELF_OK="no"
   SELF_CRITIQUE=""
   local diff sys user content json
-  diff=$(git diff "origin/${BASE_BRANCH}..HEAD" | head -c 60000)
+  # Drop generated/lockfiles and lead with the --stat so a big regenerated lockfile
+  # (often alphabetically first) can't crowd the real change out from under the byte
+  # cap and trigger a false "not implemented".
+  local exclude=(':(exclude)package-lock.json' ':(exclude)yarn.lock'
+    ':(exclude)pnpm-lock.yaml' ':(exclude)go.sum' ':(exclude)*.lock'
+    ':(exclude)*.min.js')
+  diff=$(
+    printf 'FILES CHANGED:\n'
+    git diff --stat "origin/${BASE_BRANCH}..HEAD" -- . "${exclude[@]}"
+    printf '\nDIFF (generated/lockfiles omitted):\n'
+    git diff "origin/${BASE_BRANCH}..HEAD" -- . "${exclude[@]}"
+  )
+  diff=$(printf '%s' "$diff" | head -c 60000)
   sys='You are a strict code reviewer. Given a feature request and the full diff of an automated agent'"'"'s change, judge whether the diff is ready to open as a pull request. Reply with ONLY a compact JSON object: {"implements":true|false,"critique":"<short: what is wrong and WHERE — name the two places that disagree>"}. Answer false if ANY of these hold: (a) the diff does not implement the requested behaviour in the right place, or changes unrelated code, or only partially implements it; (b) there is no meaningful automated test, OR the test does not exercise the real production code path it claims to (e.g. it re-implements the logic inline or asserts on a fixture instead of calling the actual function/endpoint) — a test that would still pass if the production change were reverted does not count; (c) the change spans layers whose contract is now inconsistent — for example the frontend reads field names the backend does not serialize (or vice versa), an API caller and its handler disagree on the request/response shape, or a constant/enum is consumed with a value the other side never produces. When unsure, answer false and say which two places to reconcile.'
-  user=$(printf 'FEATURE REQUEST:\n%s\n\nDIFF:\n%s\n' \
+  user=$(printf 'FEATURE REQUEST:\n%s\n\n%s\n' \
     "${AGENT_FEATURE:-$AGENT_PROMPT}" "$diff")
   content=$(deepseek_call "$sys" "$user") || return 0
   json=$(printf '%s' "$content" | extract_json)
@@ -378,7 +571,7 @@ while [ "$self_round" -lt "$SELF_REVIEW_ROUNDS" ]; do
     echo "implement the requested behaviour where it belongs — including a test."
   } > /work/self-review.txt
   mapfile -t ROUND_FILES < <(branch_files)
-  run_aider /work/self-review.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} \
+  run_aider_round /work/self-review.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} \
     || fail "aider self-review fix run failed"
 done
 
@@ -452,7 +645,7 @@ verify_gate() {
       tail -c 12000 /work/verify.log
     } > /work/verify-findings.txt
     mapfile -t ROUND_FILES < <(branch_files)
-    run_aider /work/verify-findings.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} \
+    run_aider_round /work/verify-findings.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} \
       || fail "aider verify-fix run failed"
     verify_once && { echo "=== local verification passed after fix round ${vround} ==="; return 0; }
   done
@@ -462,7 +655,19 @@ verify_gate() {
 }
 
 if ! verify_gate; then
-  fail "local verification (build/lint/test) still failing after ${VERIFY_MAX_ROUNDS} fix round(s); no PR opened"
+  # Don't discard a near-complete change. Push the branch (no PR — it can't pass
+  # CI yet) so a human can finish it, and say so in the reason. The branch is the
+  # bot's own; this is the same push that would happen had verification passed.
+  reason="local verification (build/lint/test) still failing after ${VERIFY_MAX_ROUNDS} fix round(s); no PR opened"
+  echo "=== ${reason}; pushing branch for manual completion ==="
+  if git push origin "$AGENT_BRANCH" >/dev/null 2>&1; then
+    reason="${reason}; branch ${AGENT_BRANCH} pushed for manual completion"
+  else
+    reason="${reason}; branch push also failed"
+  fi
+  emit_result "$(jq -cn --arg r "$reason" --arg b "$AGENT_BRANCH" \
+    '{status:"failed", reason:$r, branch:$b, merged:false}')"
+  exit 1
 fi
 
 echo "=== pushing branch ${AGENT_BRANCH} ==="
@@ -478,12 +683,14 @@ $(printf '%s' "${AGENT_FEATURE:-see commit history}" | head -c 2000)
 Implemented by aider + ${AIDER_MODEL}. This PR will be reviewed by the
 repository's GitHub Action; findings are addressed automatically before merge."
 
+# gh_api returns non-zero on an HTTP error but still echoes the body; don't mask
+# it with a generic message — the specific check below reports GitHub's own reason.
 PR_RESPONSE=$(gh_api POST "${API}/pulls" "$(jq -cn \
   --arg title "$AGENT_PR_TITLE" \
   --arg head "$AGENT_BRANCH" \
   --arg base "$BASE_BRANCH" \
   --arg body "$PR_BODY" \
-  '{title:$title, head:$head, base:$base, body:$body}')") || fail "GitHub PR API call failed"
+  '{title:$title, head:$head, base:$base, body:$body}')")
 
 PR_NUMBER=$(echo "$PR_RESPONSE" | jq -r '.number // empty')
 PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url // empty')
@@ -523,26 +730,38 @@ wait_for_review() {
   local iters=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
     iters=$((iters + 1))
-    local checks total completed seen
-    checks=$(gh_api GET "${API}/commits/${head_sha}/check-runs?per_page=100")
+    local checks reviews comments total completed seen
+    # A failed fetch means "unknown, poll again" — never "no checks / no review".
+    checks=$(gh_api GET "${API}/commits/${head_sha}/check-runs?per_page=100") \
+      || { echo "=== check-runs fetch failed; retrying ==="; sleep "$REVIEW_POLL"; continue; }
     total=$(echo "$checks" | jq -r '.check_runs | length // 0')
     completed=$(echo "$checks" | jq -r '[.check_runs[]? | select(.status=="completed")] | length')
     FAILED_CHECKS=$(echo "$checks" | jq -r \
       '[.check_runs[]? | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled" or .conclusion=="action_required")] | length')
 
-    # Formal verdict, only if the reviewer emitted one (it does so via a
-    # REQUEST_CHANGES event when request-changes-on is configured; otherwise it
-    # posts no formal verdict and the sticky summary below is the whole review).
-    REVIEW_STATE=$(gh_api GET "${API}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-      | jq -r --arg bot "$BOT_LOGIN" \
-        '[.[] | select(.user.login != $bot) | select(.state=="APPROVED" or .state=="CHANGES_REQUESTED")] | last | .state // ""')
-    # Whether the reviewer has weighed in on this commit: its sticky summary
-    # comment is present. The commit's check runs (below) gate freshness, so a
-    # summary carried over from a prior push is only acted on once this commit's
-    # review run has completed.
-    seen=$(gh_api GET "${API}/issues/${PR_NUMBER}/comments?per_page=100" \
-      | jq -r --arg m "$REVIEW_SUMMARY_MARKER" \
-        '[.[] | select((.body // "") | contains($m))] | length')
+    reviews=$(gh_api GET "${API}/pulls/${PR_NUMBER}/reviews?per_page=100") \
+      || { echo "=== reviews fetch failed; retrying ==="; sleep "$REVIEW_POLL"; continue; }
+    # Formal verdict, only when it belongs to the CURRENT head commit. The reviewer
+    # posts a formal review object only when it has inline findings; after a clean
+    # fix it merely edits its sticky comment, leaving the old CHANGES_REQUESTED as
+    # the "last" review forever. Scoping to head_sha lets a resolved verdict fall
+    # through to the prose judge instead of pinning the decision to "fix".
+    REVIEW_STATE=$(echo "$reviews" \
+      | jq -r --arg bot "$BOT_LOGIN" --arg sha "$head_sha" \
+        '[.[] | select(.user.login != $bot) | select(.commit_id == $sha)
+              | select(.state=="APPROVED" or .state=="CHANGES_REQUESTED")] | last | .state // ""')
+
+    comments=$(gh_api GET "${API}/issues/${PR_NUMBER}/comments?per_page=100") \
+      || { echo "=== comments fetch failed; retrying ==="; sleep "$REVIEW_POLL"; continue; }
+    # Whether the reviewer has weighed in on THIS push. The sticky summary comment
+    # is edited in place across rounds, so its mere presence is stale — require it
+    # to have been updated after we pushed the commit under review (REVIEW_SINCE).
+    # (Worker/GitHub clock skew is negligible next to the check+review latency
+    # between our push and the reviewer editing its comment.)
+    seen=$(echo "$comments" \
+      | jq -r --arg m "$REVIEW_SUMMARY_MARKER" --arg since "$REVIEW_SINCE" \
+        '[.[] | select((.body // "") | contains($m))
+              | select(($since == "") or (.updated_at > $since))] | length')
     REVIEW_SEEN="no"; [ "${seen:-0}" -gt 0 ] && REVIEW_SEEN="yes"
 
     # "done" = all present checks completed. total==0 is ambiguous: either the repo
@@ -568,6 +787,36 @@ wait_for_review() {
   return 1
 }
 
+# Real detail for each failed check: its GitHub summary, its annotations
+# (path:line: message), and a tail of the matching Actions job log — otherwise the
+# model gets only a bare "check: failed" and fixes CI blind. The check-run id is
+# the Actions job id for workflow-produced checks; other providers 404 and degrade
+# to summary+annotations. `curl -L` drops the Authorization header on the cross-host
+# redirect to blob storage, so the token is not leaked to the log-download host.
+failed_check_details() {
+  local head_sha="$1" checks id name
+  checks=$(gh_api GET "${API}/commits/${head_sha}/check-runs?per_page=100") || return 0
+  while IFS=$'\t' read -r id name; do
+    [ -n "$id" ] || continue
+    echo "### CHECK: ${name}"
+    echo "$checks" | jq -r --arg id "$id" \
+      '.check_runs[]? | select((.id|tostring)==$id) | .output.summary // .output.title // "failed"'
+    gh_api GET "${API}/check-runs/${id}/annotations?per_page=50" 2>/dev/null \
+      | jq -r '.[]? | "  \(.path):\(.start_line // "?"): \(.annotation_level // "note"): \((.message // "")|gsub("\n";" "))"' 2>/dev/null
+    local logtail
+    logtail=$(curl -sSL --max-time 30 \
+      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+      -H "Accept: application/vnd.github+json" \
+      "${API}/actions/jobs/${id}/logs" 2>/dev/null | tail -c 4000)
+    if [ -n "$logtail" ]; then
+      echo "  --- job log tail ---"
+      printf '%s\n' "$logtail" | sed 's/^/  /'
+    fi
+  done < <(echo "$checks" | jq -r '.check_runs[]?
+      | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled")
+      | "\(.id)\t\(.name)"')
+}
+
 collect_findings() {
   local head_sha="$1"
   {
@@ -584,8 +833,7 @@ collect_findings() {
       | jq -r '.[]? | "\(.path):\(.line // .original_line // "?"): \((.body // "") | gsub("<!--[^>]*-->"; "") | gsub("^\\s+|\\s+$"; ""))"'
     echo
     echo "--- FAILED CHECKS ---"
-    gh_api GET "${API}/commits/${head_sha}/check-runs?per_page=100" \
-      | jq -r '.check_runs[]? | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled") | "\(.name): \(.output.summary // .output.title // "failed")"'
+    failed_check_details "$head_sha" | head -c 20000
   } > /work/findings.txt
 }
 
@@ -632,9 +880,14 @@ FAILED_CHECKS=0
 JUDGE_VERDICT=""
 JUDGE_REASON=""
 MERGED=false
+# UTC timestamp of the most recent push; a sticky review comment is only "fresh"
+# once its updated_at passes this. Set immediately before every push.
+REVIEW_SINCE=""
 
-round=0
-while [ "$round" -lt "$REVIEW_MAX_ROUNDS" ]; do
+# Evaluate the head commit up to REVIEW_MAX_ROUNDS+1 times but only spend a fix in
+# the first REVIEW_MAX_ROUNDS iterations: this way the LAST pushed fix still gets a
+# wait+decide (and can merge) instead of being pushed and abandoned.
+for attempt in $(seq 0 "$REVIEW_MAX_ROUNDS"); do
   HEAD_SHA=$(git rev-parse HEAD)
   if ! wait_for_review "$HEAD_SHA"; then
     fail "timed out waiting for the PR review"
@@ -670,15 +923,23 @@ while [ "$round" -lt "$REVIEW_MAX_ROUNDS" ]; do
     fail "auto-merge failed: $(echo "$MERGE_RESPONSE" | jq -r '.message // "unknown error"')"
   fi
 
-  round=$((round + 1))
-  echo "=== findings to address (failed_checks=${FAILED_CHECKS}, verdict='${REVIEW_STATE:-none}'; round ${round}/${REVIEW_MAX_ROUNDS}) ==="
+  # Not mergeable, and no fix budget left: the fix pushed last round was just
+  # evaluated above and still fell short. Stop and leave the PR open.
+  if [ "$attempt" -ge "$REVIEW_MAX_ROUNDS" ]; then
+    break
+  fi
+
+  fix_round=$((attempt + 1))
+  echo "=== findings to address (failed_checks=${FAILED_CHECKS}, verdict='${REVIEW_STATE:-none}'; round ${fix_round}/${REVIEW_MAX_ROUNDS}) ==="
   collect_findings "$HEAD_SHA"
   mapfile -t ROUND_FILES < <(branch_files)
-  run_aider /work/findings.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} || fail "aider fix run failed"
+  run_aider_round /work/findings.txt ${ROUND_FILES[@]+"${ROUND_FILES[@]}"} ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"} \
+    || fail "aider fix run failed"
 
   if [ "$(git rev-list --count "origin/${AGENT_BRANCH}..HEAD")" -eq 0 ]; then
     fail "agent produced no fix commits for the review findings"
   fi
+  REVIEW_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # freshness baseline for this push
   git push origin "$AGENT_BRANCH" || fail "git push (fix) failed"
 done
 
