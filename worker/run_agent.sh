@@ -294,8 +294,14 @@ prepare_cmd_deps() {
     tok="${seg%% *}"
     case "$tok" in
       cd)
+        # Accumulate the path: `cd backend && cd ../frontend` must resolve to
+        # `frontend`, not `../frontend`. Absolute targets replace; relative ones
+        # append and let the filesystem collapse the `..`.
         local d="${seg#cd }"; d="${d%% *}"
-        [ -n "$d" ] && dir="$d" ;;
+        if [ -z "$d" ]; then :
+        elif [ "${d#/}" != "$d" ]; then dir="$d"
+        else dir="$dir/$d"
+        fi ;;
       npm|npx|node)
         prepare_npm_dir "$dir" || return 1
         check_npm_script "$dir" "$seg" || return 1 ;;
@@ -626,10 +632,29 @@ verify_once() {
   return 1
 }
 
+# Install node deps for every tracked package.json (excluding node_modules). The
+# test-command prep only covers the dirs that command touches, but the repo's
+# pre-commit hooks (eslint/tsc/vitest) can run in other packages and fail with
+# "command not found" (exit 127) when their node_modules are absent. Best-effort:
+# a failed install is logged, not fatal.
+install_repo_node_deps() {
+  local pj dir
+  while IFS= read -r pj; do
+    dir=$(dirname "$pj")
+    prepare_npm_dir "$dir" || echo "=== npm install failed in ${dir}; pre-commit hooks there may not run ==="
+  done < <(git ls-files | grep -E '(^|/)package\.json$' | grep -v '/node_modules/')
+}
+
 verify_gate() {
   if [ -z "$EFFECTIVE_VERIFY" ] && ! have_precommit; then
     echo "=== no verify command or pre-commit config; skipping local gate ==="
     return 0
+  fi
+  # pre-commit hooks may shell out to per-package JS tooling; make sure it is
+  # installed before the gate runs, or those hooks fail with exit 127.
+  if have_precommit; then
+    echo "=== ensuring node deps for pre-commit hooks ==="
+    install_repo_node_deps
   fi
   echo "=== pre-PR verification gate (cmd='${EFFECTIVE_VERIFY:-none}', precommit=$(have_precommit && echo yes || echo no)) ==="
   verify_once && { echo "=== local verification passed ==="; return 0; }

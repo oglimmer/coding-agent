@@ -12,8 +12,27 @@ Legend: **Problem** what goes wrong · **Where** anchor · **Fix** approach ·
 ## Implementation status (branch `harden-worker`)
 
 DONE (implemented + shellcheck-clean + unit-tested logic): 1.1, 1.2, 1.3, 1.4,
-2.1, 2.2, 3.1, 3.3, 3.4, 3.5, 3.6, 4.1, 4.3. Line anchors below refer to the
+2.1, 2.2, 3.1, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.3. Line anchors below refer to the
 ORIGINAL `a50718a` layout and are now stale — see the current file.
+
+### 3.7 Cross-stack deps: cd-path bug + pre-commit tooling  ⬅ from job 874b4401
+
+First post-fix run (`worker_commit c03a1ef`): the timeout/discard failure was gone
+— aider ran to completion, the go build/vet fallback (3.6) gave it a backend
+signal, and the branch was pushed for salvage (2.2). It then failed the verify
+gate on `eslint --fix (frontend) ... Failed, exit code 127` (eslint not found:
+frontend `node_modules` never installed). Two causes, both fixed:
+- **3.7a** `prepare_cmd_deps` tracked only the last `cd` arg, so
+  `cd backend && … && cd ../frontend` looked for `../frontend/package.json` from
+  the repo root and skipped the frontend. Now the path accumulates
+  (`backend/../frontend`, which the FS collapses to `frontend`).
+- **3.7b** dep install was scoped to the TEST command's dirs, but the verify
+  gate's pre-commit hooks (eslint/tsc/vitest) run in other packages. Added
+  `install_repo_node_deps` (every tracked non-vendored `package.json`) before the
+  pre-commit run so those hook binaries are on PATH.
+- **Still open:** the aider loop only has a backend signal (go build/vet); the
+  frontend breaks are seen only at the verify gate. Consider a frontend check in
+  the fallback for cross-stack repos, and/or a higher VERIFY_MAX_ROUNDS.
 
 NOT DONE (deferred, needs a decision or is lower value):
 - **4.2** no-reviewer policy — product decision (fail-fast probe vs. merge-on-green).
