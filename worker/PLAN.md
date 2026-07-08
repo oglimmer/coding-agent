@@ -12,8 +12,52 @@ Legend: **Problem** what goes wrong · **Where** anchor · **Fix** approach ·
 ## Implementation status (branch `harden-worker`)
 
 DONE (implemented + shellcheck-clean + unit-tested logic): 1.1, 1.2, 1.3, 1.4,
-2.1, 2.2, 3.1, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.3. Line anchors below refer to the
-ORIGINAL `a50718a` layout and are now stale — see the current file.
+2.1, 2.2, 3.1, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 4.1, 4.3. Line anchors below refer to
+the ORIGINAL `a50718a` layout and are now stale — see the current file.
+
+Note on 3.5/3.6: those items hardened the *model-guessed* test command (validate
+`npm run <script>`, add a compile/vet fallback). 3.8 supersedes their premise —
+the worker no longer lets a model invent an executable test command at all — but
+their guards (script existence check, fallback gate) are kept as belt-and-braces.
+
+### 3.8 Detect the test command; never let a model invent one  ⬅ from job 4d3e5c04
+
+Root cause of the `test:unit` class of failures: the scope model was asked to
+*guess* `test_cmd`, and a guessed command is the only source that can name a
+target that doesn't exist. Job `4d3e5c04` (repo `oglimmer/irl-planner-pro`) is the
+canonical case — the model invented `npm run test:unit` (the frontend defines
+`test`, not `test:unit`), baseline went red, and auto-test was disabled. Fixed by
+removing the model as a source and detecting the command deterministically:
+- **3.8a** Dropped `test_cmd` from the scope prompt/parsing and deleted
+  `validate_test_cmd`. New `detect_test_cmd` builds `SCOPE_TEST_CMD` from real
+  manifests: it maps `SCOPE_FILES` to their nearest enclosing module (`go.mod` /
+  `package.json` / `pyproject.toml` / `Makefile`), reads each module's command
+  from the manifest that is present (Go → `go test ./...`; Node → the first of
+  `test`/`typecheck`/`build` actually in `.scripts`, skipping the npm-init
+  placeholder; Python → `pytest`; Make → `make test`), and chains modules with
+  correct relative `cd ../sibling` paths (`relpath`). Falls back to the repo's
+  top-level modules when scoping returned nothing, so a failed scope still yields
+  a signal. A hallucinated script name is now structurally impossible.
+- **3.8b** Fixed a latent bug in `prepare_cmd_deps` that would have re-broken the
+  exact cross-stack case: `while IFS= read -r seg` over the `&&`-split silently
+  dropped the LAST segment (the split has no trailing newline). For a command like
+  `cd backend && go test ./... && cd ../frontend && npm run test`, the final
+  `npm run test` was never processed → frontend deps never installed and its
+  script never checked → baseline red → auto-test disabled. Now
+  `while IFS= read -r seg || [ -n "$seg" ]`.
+- **3.8c** New optional per-repo `test_command` (env `AGENT_TEST_CMD`; DB
+  `test_command`; surfaced in the repo add/edit form and job metadata), distinct
+  from `verify_command`: it overrides detection for the fast aider `--auto-test`
+  loop so an owner can supply a cheap loop command without making their heavy
+  verify gate run after every edit. Empty = detect.
+- **Precedence, both roles now deterministic (model never):** inner loop =
+  `AGENT_TEST_CMD` › detection › compile/vet fallback (3.6); gate = `VERIFY_CMD` ›
+  detected `SCOPE_TEST_CMD`.
+- **Verify:** detection unit-tested against a real `irl-planner-pro` checkout
+  (backend-only, frontend-only, both stacks, nested file, no-scope) → emits
+  `npm run test`, not `test:unit`; `prepare_cmd_deps` reaches the frontend segment
+  (installs deps, checks the script) and rejects a hallucinated last-segment
+  script. Backend `go build`/`vet`/`test` and frontend `npm run check` green.
 
 ### 3.7 Cross-stack deps: cd-path bug + pre-commit tooling  ⬅ from job 874b4401
 
@@ -30,9 +74,11 @@ frontend `node_modules` never installed). Two causes, both fixed:
   gate's pre-commit hooks (eslint/tsc/vitest) run in other packages. Added
   `install_repo_node_deps` (every tracked non-vendored `package.json`) before the
   pre-commit run so those hook binaries are on PATH.
-- **Still open:** the aider loop only has a backend signal (go build/vet); the
-  frontend breaks are seen only at the verify gate. Consider a frontend check in
-  the fallback for cross-stack repos, and/or a higher VERIFY_MAX_ROUNDS.
+- **Resolved by 3.8:** the aider loop is no longer backend-only. `detect_test_cmd`
+  emits a per-module chain (e.g. `cd backend && go test ./... && cd ../frontend &&
+  npm run test`), so a cross-stack repo now gets a frontend signal *inside* the
+  loop, not just at the verify gate. A higher VERIFY_MAX_ROUNDS is still worth
+  considering independently.
 
 NOT DONE (deferred, needs a decision or is lower value):
 - **4.2** no-reviewer policy — product decision (fail-fast probe vs. merge-on-green).
@@ -259,6 +305,11 @@ NOT DONE (deferred, needs a decision or is lower value):
 
 ### 3.5 `prepare_test_cmd` mishandles cross-stack / multi-`cd` commands  ⬅ NEW (from job 226cfe38)
 
+> **Superseded by 3.8.** Multi-`cd` dir tracking now lives in `prepare_cmd_deps`
+> (and 3.8b fixed its last-segment drop). The command is no longer model-produced;
+> `detect_test_cmd` emits the cross-stack chain directly.
+
+
 - **Problem:** The scope model routinely returns a compound command that spans
   two stacks, e.g. `cd backend && go test ./... && cd ../frontend && npm run
   test:unit`. `prepare_test_cmd` only understands a SINGLE leading `cd`: its dir
@@ -279,6 +330,11 @@ NOT DONE (deferred, needs a decision or is lower value):
   both `backend` and `frontend` deps must be installed and baseline go green.
 
 ### 3.6 Scope model hallucinates a non-existent test target; no fallback lever  ⬅ NEW (from job 226cfe38)
+
+> **Superseded by 3.8.** The model no longer proposes an executable test command,
+> so a hallucinated target can't occur. The `check_npm_script` guard and the
+> compile/vet fallback below are retained as defence in depth.
+
 
 - **Problem:** Two compounding gaps exposed by 226cfe38:
   1. The model invented an npm script (`test:unit`) that isn't in the frontend
