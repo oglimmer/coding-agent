@@ -122,6 +122,20 @@ for var in GITHUB_TOKEN AGENT_REPO AGENT_BRANCH AGENT_PROMPT AGENT_PR_TITLE; do
   [ -n "${!var:-}" ] || fail "missing required env var: $var"
 done
 
+# Provenance + effective config, printed into the log so a run can be analysed
+# later (this block is persisted with the log even after the pod is gone). The
+# worker_commit is baked into the image at build time.
+echo "=== job metadata ==="
+echo "worker_commit:  ${WORKER_GIT_COMMIT:-none}"
+echo "worker_version: ${WORKER_VERSION:-dev}"
+echo "worker_built:   ${WORKER_BUILD_TIME:-unknown}"
+echo "repo:           ${AGENT_REPO}  base=${BASE_BRANCH}"
+echo "model:          ${AIDER_MODEL}  editor=${AIDER_EDITOR_MODEL}"
+echo "review_rounds:  ${REVIEW_MAX_ROUNDS}  verify_rounds=${VERIFY_MAX_ROUNDS}  aider_timeout=${AIDER_TIMEOUT}s"
+echo "verify_cmd:     ${VERIFY_CMD:-<model-guessed>}"
+echo "deepseek_base:  ${DEEPSEEK_BASE_URL}"
+echo "===================="
+
 echo "=== coding-agent worker: cloning ${AGENT_REPO} ==="
 git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${AGENT_REPO}.git" \
   "$REPO_DIR" || fail "git clone failed"

@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/oglimmer/coding-agent/backend/internal/buildinfo"
 	"github.com/oglimmer/coding-agent/backend/internal/k8s"
 )
 
@@ -55,6 +57,23 @@ right place, with a meaningful test, will be accepted.`
 // buildPrompt renders the enhanced prompt for a feature request.
 func buildPrompt(repoFullName, username, feature string) string {
 	return fmt.Sprintf(promptTemplate, repoFullName, username, strings.TrimSpace(feature))
+}
+
+// jobMetadata captures the platform version and effective worker config a job
+// runs under. Stored as JSON on the job so a run can be analysed after the fact.
+func (a *App) jobMetadata(repo Repo) map[string]any {
+	return map[string]any{
+		"platformCommit":  buildinfo.Commit,
+		"platformVersion": buildinfo.Version,
+		"workerImage":     a.Cfg.WorkerImage,
+		"model":           a.Cfg.WorkerModel,
+		"editorModel":     a.Cfg.WorkerEditorModel,
+		"reviewMaxRounds": a.Cfg.ReviewMaxRounds,
+		"aiderTimeoutSec": a.Cfg.AiderTimeoutSec,
+		"deepseekBaseURL": a.Cfg.DeepSeekBaseURL,
+		"baseBranch":      repo.BaseBranch,
+		"verifyCommand":   repo.VerifyCommand,
+	}
 }
 
 func randomSuffix() string {
@@ -110,6 +129,15 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.serverErr(w, r, err, "")
 		return
+	}
+
+	// Snapshot the platform version + config this job runs under, for later
+	// analysis (it survives independently of the worker pod and its logs).
+	if raw, mErr := json.Marshal(a.jobMetadata(repo)); mErr == nil {
+		if err := a.Store.SetJobMetadata(r.Context(), job.ID, raw); err != nil {
+			log.Printf("WARN jobs: set metadata for %s: %v", job.ID, err)
+		}
+		job.Metadata = raw
 	}
 
 	// --- harmful-content gate (fail closed) --- runs first, before any compute.
@@ -203,16 +231,34 @@ func (a *App) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prefer the live pod tail (freshest, and the only source while the agent is
+	// still working); fall back to the log we persisted when the job finished,
+	// which outlives the pod's TTL. That fallback is what lets the UI show the
+	// full run long after the worker is gone.
+	stored := func() string {
+		s, err := a.Store.JobLog(r.Context(), job.ID)
+		if err != nil && err != ErrNotFound {
+			log.Printf("WARN jobs: stored log for %s: %v", job.ID, err)
+		}
+		return s
+	}
+
 	if a.K8s == nil || job.K8sJobName == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"logs": ""})
+		writeJSON(w, http.StatusOK, map[string]any{"logs": stored(), "persisted": true})
 		return
 	}
 
 	logs, err := a.K8s.PodLogs(r.Context(), job.K8sJobName, jobLogTailLines)
-	if err != nil {
-		// The pod may not have started yet, or was cleaned up after finishing.
-		// Treat as "no logs right now" so the UI keeps polling gracefully.
-		log.Printf("WARN jobs: logs for %s (%s): %v", job.ID, job.K8sJobName, err)
+	if err != nil || logs == "" {
+		// Pod not started yet, or cleaned up after finishing. Serve the persisted
+		// log if we have one; otherwise report "nothing yet" so the UI keeps polling.
+		if err != nil {
+			log.Printf("WARN jobs: logs for %s (%s): %v", job.ID, job.K8sJobName, err)
+		}
+		if s := stored(); s != "" {
+			writeJSON(w, http.StatusOK, map[string]any{"logs": s, "persisted": true})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"logs": "", "unavailable": true})
 		return
 	}

@@ -20,6 +20,19 @@ export interface Repo {
 
 export type JobStatus = 'checking' | 'rejected' | 'running' | 'success' | 'failed'
 
+export interface JobMetadata {
+  platformCommit?: string
+  platformVersion?: string
+  workerImage?: string
+  model?: string
+  editorModel?: string
+  reviewMaxRounds?: number
+  aiderTimeoutSec?: number
+  deepseekBaseURL?: string
+  baseBranch?: string
+  verifyCommand?: string
+}
+
 export interface Job {
   id: string
   repoId: string
@@ -31,6 +44,7 @@ export interface Job {
   branch?: string
   prUrl?: string
   reason?: string
+  metadata?: JobMetadata
   createdAt: string
   updatedAt: string
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -67,19 +68,22 @@ func (r Repo) FullName() string { return r.Owner + "/" + r.Name }
 
 // Job is one feature request and its lifecycle.
 type Job struct {
-	ID         string    `json:"id"`
-	RepoID     string    `json:"repoId"`
-	RepoName   string    `json:"repoName"`
-	UserID     string    `json:"userId"`
-	UserName   string    `json:"userName"`
-	Feature    string    `json:"feature"`
-	Status     string    `json:"status"`
-	K8sJobName string    `json:"-"`
-	Branch     string    `json:"branch,omitempty"`
-	PRURL      string    `json:"prUrl,omitempty"`
-	Reason     string    `json:"reason,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID         string `json:"id"`
+	RepoID     string `json:"repoId"`
+	RepoName   string `json:"repoName"`
+	UserID     string `json:"userId"`
+	UserName   string `json:"userName"`
+	Feature    string `json:"feature"`
+	Status     string `json:"status"`
+	K8sJobName string `json:"-"`
+	Branch     string `json:"branch,omitempty"`
+	PRURL      string `json:"prUrl,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	// Metadata is the config snapshot captured when the job was created (platform
+	// commit, models, review rounds, verify command, …). Small; kept in list rows.
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
 // Store is the data-access layer. Read queries live here; transactional writes
@@ -261,16 +265,20 @@ func (s *Store) DeleteRepo(ctx context.Context, id string) error {
 const jobSelect = `
 	SELECT j.id, j.repo_id, r.owner || '/' || r.name, j.user_id, u.name,
 	       j.feature, j.status, j.k8s_job_name, j.branch, j.pr_url, j.reason,
-	       j.created_at, j.updated_at
+	       j.metadata, j.created_at, j.updated_at
 	FROM jobs j
 	JOIN repos r ON r.id = j.repo_id
 	JOIN users u ON u.id = j.user_id`
 
 func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 	var j Job
+	var meta []byte
 	err := row.Scan(&j.ID, &j.RepoID, &j.RepoName, &j.UserID, &j.UserName,
 		&j.Feature, &j.Status, &j.K8sJobName, &j.Branch, &j.PRURL, &j.Reason,
-		&j.CreatedAt, &j.UpdatedAt)
+		&meta, &j.CreatedAt, &j.UpdatedAt)
+	if len(meta) > 0 && string(meta) != "{}" {
+		j.Metadata = json.RawMessage(meta)
+	}
 	return j, err
 }
 
@@ -342,6 +350,28 @@ func (s *Store) FinishJob(ctx context.Context, id, status, prURL, reason string)
 		UPDATE jobs SET status = $2, pr_url = $3, reason = $4, updated_at = now()
 		WHERE id = $1`, id, status, prURL, reason)
 	return err
+}
+
+// SetJobMetadata stores the config snapshot for a job (JSON object).
+func (s *Store) SetJobMetadata(ctx context.Context, id string, metadata json.RawMessage) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE jobs SET metadata = $2 WHERE id = $1`, id, []byte(metadata))
+	return err
+}
+
+// SetJobLog persists the worker's full log so it survives pod TTL cleanup.
+func (s *Store) SetJobLog(ctx context.Context, id, logs string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE jobs SET logs = $2 WHERE id = $1`, id, logs)
+	return err
+}
+
+// JobLog returns the persisted worker log for a job (empty if none stored yet).
+func (s *Store) JobLog(ctx context.Context, id string) (string, error) {
+	var logs string
+	err := s.DB.QueryRowContext(ctx, `SELECT logs FROM jobs WHERE id = $1`, id).Scan(&logs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return logs, err
 }
 
 // DeleteJob removes a job row. Returns ErrNotFound if nothing was deleted.

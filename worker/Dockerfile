@@ -49,4 +49,13 @@ ENV HOME=/work
 ENV GOPATH=/work/go
 ENV GOCACHE=/work/.cache/go-build
 
+# Build provenance, baked in last so it never busts the toolchain layer cache.
+# oglimmer.sh already passes these --build-arg values to every image.
+ARG GIT_COMMIT=none
+ARG VERSION=dev
+ARG BUILD_TIME=unknown
+ENV WORKER_GIT_COMMIT=$GIT_COMMIT \
+    WORKER_VERSION=$VERSION \
+    WORKER_BUILD_TIME=$BUILD_TIME
+
 ENTRYPOINT ["/usr/local/bin/run_agent.sh"]

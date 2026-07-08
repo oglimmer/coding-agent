@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -10,6 +11,11 @@ import (
 )
 
 const workerLogTailLines = 400
+
+// maxStoredLogBytes caps the log we persist per job. A normal run is well under
+// this; a runaway loop could be larger, so we keep the tail (where the failure
+// and result marker live) and note the truncation.
+const maxStoredLogBytes = 1 << 20 // 1 MiB
 
 // StartWatcher runs a background loop that reconciles running jobs with their
 // Kubernetes Job status, parses the worker result marker from pod logs, and
@@ -73,9 +79,17 @@ func (a *App) reconcileOne(ctx context.Context, job Job) {
 		return
 	}
 
-	logs, err := a.K8s.PodLogs(ctx, job.K8sJobName, workerLogTailLines)
+	// Fetch the FULL log (tail <= 0) once, now, while the pod still exists: it is
+	// both what we parse the result from and what we persist for later analysis,
+	// since the pod is TTL-cleaned shortly after finishing.
+	logs, err := a.K8s.PodLogs(ctx, job.K8sJobName, 0)
 	if err != nil {
 		log.Printf("WARN watcher: logs for job %s: %v", job.ID, err)
+	}
+	if logs != "" {
+		if err := a.Store.SetJobLog(ctx, job.ID, capLog(logs)); err != nil {
+			log.Printf("WARN watcher: persist log for job %s: %v", job.ID, err)
+		}
 	}
 	result, found := k8s.ParseResult(logs)
 
@@ -99,4 +113,14 @@ func (a *App) reconcileOne(ctx context.Context, job Job) {
 		return
 	}
 	log.Printf("INFO watcher: job %s finished status=%s pr=%s", job.ID, status, prURL)
+}
+
+// capLog bounds a persisted log to maxStoredLogBytes, keeping the tail (the end
+// carries the failure and the CODING_AGENT_RESULT marker) with a truncation note.
+func capLog(logs string) string {
+	if len(logs) <= maxStoredLogBytes {
+		return logs
+	}
+	dropped := len(logs) - maxStoredLogBytes
+	return "[… " + strconv.Itoa(dropped) + " earlier bytes truncated …]\n" + logs[len(logs)-maxStoredLogBytes:]
 }

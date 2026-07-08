@@ -16,6 +16,25 @@ const { confirm } = useConfirm()
 const { data: job, loading, error, reload } = useAsyncData<Job | null>(() => api.getJob(props.id), null)
 
 const inFlight = computed(() => job.value?.status === 'running' || job.value?.status === 'checking')
+
+// Provenance/config snapshot captured when the job was created, for diagnosis.
+const metaRows = computed(() => {
+  const m = job.value?.metadata
+  if (!m) return []
+  const rows: { label: string; value: string }[] = []
+  const push = (label: string, value: unknown) => {
+    if (value !== undefined && value !== null && value !== '') rows.push({ label, value: String(value) })
+  }
+  push('Platform', [m.platformVersion, m.platformCommit].filter(Boolean).join(' @ '))
+  push('Worker image', m.workerImage)
+  push('Model', m.model)
+  push('Editor model', m.editorModel)
+  push('Review rounds', m.reviewMaxRounds)
+  push('Aider timeout', m.aiderTimeoutSec ? `${m.aiderTimeoutSec}s` : undefined)
+  push('Base branch', m.baseBranch)
+  push('Verify command', m.verifyCommand)
+  return rows
+})
 const canRetry = computed(() => {
   const s = job.value?.status
   return s === 'failed' || s === 'rejected'
@@ -123,6 +142,16 @@ async function remove() {
         {{ job.reason }}
       </div>
 
+      <details v-if="metaRows.length" class="provenance">
+        <summary>Run metadata</summary>
+        <dl class="meta">
+          <div v-for="row in metaRows" :key="row.label">
+            <dt>{{ row.label }}</dt>
+            <dd class="mono">{{ row.value }}</dd>
+          </div>
+        </dl>
+      </details>
+
       <JobLog v-if="hadPod" :text="logs" :live="inFlight" />
 
       <p v-if="actionError" class="error-banner" style="margin-top: 1rem">{{ actionError }}</p>
@@ -200,6 +229,17 @@ async function remove() {
   color: var(--danger);
   border-color: rgb(var(--danger-rgb) / 0.4);
   background: rgb(var(--danger-rgb) / 0.1);
+}
+.provenance {
+  margin-top: 1.5rem;
+}
+.provenance summary {
+  cursor: pointer;
+  color: var(--text-muted, var(--muted));
+  font-size: 0.9rem;
+}
+.provenance .meta {
+  margin-top: 0.75rem;
 }
 .actions {
   display: flex;

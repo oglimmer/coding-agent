@@ -301,7 +301,13 @@ func (c *Client) PodLogs(ctx context.Context, jobName string, tailLines int64) (
 	if len(pods.Items) == 0 {
 		return "", nil
 	}
-	req := c.cs.CoreV1().Pods(c.namespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{TailLines: &tailLines})
+	// tailLines <= 0 means "the whole log" (nil TailLines), used when persisting a
+	// finished job's complete output; a positive value tails for the live view.
+	opts := &corev1.PodLogOptions{}
+	if tailLines > 0 {
+		opts.TailLines = &tailLines
+	}
+	req := c.cs.CoreV1().Pods(c.namespace).GetLogs(pods.Items[0].Name, opts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("k8s: stream logs for %s: %w", jobName, err)
