@@ -16,6 +16,7 @@ type repoInput struct {
 	Name          string `json:"name"`
 	BaseBranch    string `json:"baseBranch"`
 	VerifyCommand string `json:"verifyCommand"`
+	TestCommand   string `json:"testCommand"`
 }
 
 // normalize trims the fields and accepts an "owner/name" string pasted into the
@@ -26,6 +27,7 @@ func (in *repoInput) normalize() bool {
 	in.Name = strings.TrimSpace(in.Name)
 	in.BaseBranch = strings.TrimSpace(in.BaseBranch)
 	in.VerifyCommand = strings.TrimSpace(in.VerifyCommand)
+	in.TestCommand = strings.TrimSpace(in.TestCommand)
 
 	if in.Name == "" && strings.Contains(in.Owner, "/") {
 		parts := strings.SplitN(in.Owner, "/", 2)
@@ -60,7 +62,7 @@ func (a *App) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, err := a.Store.CreateRepo(r.Context(), req.Owner, req.Name, req.BaseBranch, req.VerifyCommand, u.ID)
+	repo, err := a.Store.CreateRepo(r.Context(), req.Owner, req.Name, req.BaseBranch, req.VerifyCommand, req.TestCommand, u.ID)
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeErr(w, http.StatusConflict, "that repository is already configured")
@@ -85,7 +87,7 @@ func (a *App) handleUpdateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, err := a.Store.UpdateRepo(r.Context(), id, req.Owner, req.Name, req.BaseBranch, req.VerifyCommand)
+	repo, err := a.Store.UpdateRepo(r.Context(), id, req.Owner, req.Name, req.BaseBranch, req.VerifyCommand, req.TestCommand)
 	if err != nil {
 		switch {
 		case err == ErrNotFound:

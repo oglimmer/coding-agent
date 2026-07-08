@@ -16,7 +16,9 @@
 #   AGENT_BASE_BRANCH   default: main
 #   AGENT_FEATURE       raw feature text (for the PR body / self-review)
 #   AGENT_VERIFY_CMD    repo's build/lint/test command; run as a hard gate before
-#                       the PR (falls back to the model-guessed test command)
+#                       the PR (falls back to the detected inner-loop command)
+#   AGENT_TEST_CMD      repo's fast inner-loop test command for aider --auto-test;
+#                       empty = detect it from the repo's manifests
 #   VERIFY_MAX_ROUNDS   corrective aider rounds for the verify gate (default: 2)
 #   AIDER_MODEL         architect (planning) model, default: deepseek/deepseek-v4-pro
 #   AIDER_EDITOR_MODEL  editing model, default: deepseek/deepseek-chat
@@ -65,9 +67,13 @@ AIDER_TIMEOUT="${AIDER_TIMEOUT:-3600}"
 AIDER_TEMPERATURE="${AIDER_TEMPERATURE:-0.2}"
 AIDER_FREQUENCY_PENALTY="${AIDER_FREQUENCY_PENALTY:-0.3}"
 # Authoritative pre-PR verification: the repo's real build/lint/test command (the
-# same one CI runs). Empty falls back to the model-guessed SCOPE_TEST_CMD so the
-# final diff is still checked once before the PR even for unconfigured repos.
+# same one CI runs). Empty falls back to the detected SCOPE_TEST_CMD so the final
+# diff is still checked once before the PR even for unconfigured repos.
 VERIFY_CMD="${AGENT_VERIFY_CMD:-}"
+# Optional repo-configured inner-loop test command (aider --auto-test). Empty =
+# detect it from the repo's manifests. Lets an owner override detection for a
+# non-standard setup without making their heavy VERIFY_CMD run after every edit.
+TEST_CMD="${AGENT_TEST_CMD:-}"
 VERIFY_MAX_ROUNDS="${VERIFY_MAX_ROUNDS:-2}"
 REPO_DIR=/work/repo
 API="https://api.github.com/repos/${AGENT_REPO:-}"
@@ -158,7 +164,8 @@ echo "worker_built:   ${WORKER_BUILD_TIME:-unknown}"
 echo "repo:           ${AGENT_REPO}  base=${BASE_BRANCH}"
 echo "model:          ${AIDER_MODEL}  editor=${AIDER_EDITOR_MODEL}"
 echo "review_rounds:  ${REVIEW_MAX_ROUNDS}  verify_rounds=${VERIFY_MAX_ROUNDS}  aider_timeout=${AIDER_TIMEOUT}s"
-echo "verify_cmd:     ${VERIFY_CMD:-<model-guessed>}"
+echo "verify_cmd:     ${VERIFY_CMD:-<detected>}"
+echo "test_cmd:       ${TEST_CMD:-<detected>}"
 echo "deepseek_base:  ${DEEPSEEK_BASE_URL}"
 echo "===================="
 
@@ -180,33 +187,116 @@ SCOPE_FILES=()
 SCOPE_TEST_CMD=""
 SCOPE_NOTES=""
 
-# Only accept a model-proposed test command that is trivially auditable: segments
-# joined by '&&', each starting with a known build tool that exists in the image.
-# (The repo's own test suite runs arbitrary code anyway — this guards against
-# nonsense, not malice.)
-validate_test_cmd() {
-  [ -n "$SCOPE_TEST_CMD" ] || return 0
-  # shellcheck disable=SC2016  # literal '$(' pattern match, not an expansion
-  case "$SCOPE_TEST_CMD" in
-    *'|'*|*';'*|*'`'*|*'$('*|*'>'*|*'<'*) SCOPE_TEST_CMD=""; return 0 ;;
-  esac
-  local seg tok
-  while IFS= read -r seg; do
-    seg="${seg#"${seg%%[![:space:]]*}"}"
-    tok="${seg%% *}"
-    case "$tok" in
-      cd) ;;
-      go|npm|npx|node|python|python3|pytest|make)
-        command -v "$tok" >/dev/null 2>&1 || { SCOPE_TEST_CMD=""; return 0; } ;;
-      *) SCOPE_TEST_CMD=""; return 0 ;;
-    esac
-  done < <(printf '%s' "$SCOPE_TEST_CMD" | sed 's/&&/\n/g')
+# --- test-command detection ----------------------------------------------------
+# The inner-loop test command (aider --auto-test) is DETECTED from the repo's real
+# manifests, never invented by a model: a hallucinated script like `test:unit`
+# (job 226cfe38) is impossible when every command is built from files that exist.
+# Precedence: explicit repo config (AGENT_TEST_CMD) > detection from the modules the
+# change touches (SCOPE_FILES) > detection from the repo's top-level modules.
+
+# True if DIR holds a recognised build manifest.
+module_manifest() {
+  local d="$1"
+  [ -f "$d/go.mod" ] || [ -f "$d/package.json" ] || [ -f "$d/pyproject.toml" ] \
+    || [ -f "$d/requirements.txt" ] || [ -f "$d/Makefile" ]
+}
+
+# Nearest ancestor of FILE (its own dir upward) that holds a manifest. Echoes the
+# repo-root-relative dir ("" = repo root); returns non-zero if none up to the root.
+nearest_module_dir() {
+  local d; d=$(dirname "$1")
+  while :; do
+    if [ "$d" = "." ]; then
+      module_manifest "." && { echo ""; return 0; }
+      return 1
+    fi
+    module_manifest "$d" && { echo "$d"; return 0; }
+    d=$(dirname "$d")
+  done
+}
+
+# The fastest per-edit validation command for the module in DIR (run from DIR),
+# derived from the manifest that is actually present. Empty if the module exposes
+# no usable signal. npm scripts are read from package.json so a script name can
+# never be hallucinated; the npm-init placeholder `test` script is skipped.
+module_cmd() {
+  local d="$1" s t
+  if [ -f "$d/go.mod" ]; then
+    echo "go test ./..."
+  elif [ -f "$d/package.json" ]; then
+    for s in test typecheck build; do
+      jq -e --arg s "$s" '.scripts[$s]' "$d/package.json" >/dev/null 2>&1 || continue
+      if [ "$s" = test ]; then
+        t=$(jq -r '.scripts.test' "$d/package.json")
+        case "$t" in *"no test specified"*|*"exit 1"*) continue ;; esac
+      fi
+      echo "npm run $s"; return 0
+    done
+  elif [ -f "$d/pyproject.toml" ] || [ -f "$d/requirements.txt" ]; then
+    echo "pytest"
+  elif [ -f "$d/Makefile" ]; then
+    grep -qE '^test[[:space:]]*:' "$d/Makefile" && echo "make test"
+  fi
+}
+
+# Relative path FROM one repo-root-relative dir TO another ("" = repo root), so a
+# multi-module command can `cd ../sibling` between stacks the way prepare_cmd_deps
+# expects (it accumulates cd segments and lets the filesystem collapse the `..`).
+relpath() {
+  local from="$1" to="$2" i=0 j rel=""
+  [ "$from" = "$to" ] && { echo ""; return; }
+  local -a fa=() ta=()
+  [ -n "$from" ] && IFS=/ read -ra fa <<<"$from"
+  [ -n "$to" ]   && IFS=/ read -ra ta <<<"$to"
+  while [ $i -lt ${#fa[@]} ] && [ $i -lt ${#ta[@]} ] && [ "${fa[$i]}" = "${ta[$i]}" ]; do
+    i=$((i + 1))
+  done
+  for ((j = i; j < ${#fa[@]}; j++)); do rel="../$rel"; done
+  for ((j = i; j < ${#ta[@]}; j++)); do rel="$rel${ta[$j]}/"; done
+  echo "${rel%/}"
+}
+
+# Populate SCOPE_TEST_CMD deterministically. Fails open (empty command) exactly as
+# a failed model guess used to, so the fallback compile/vet gate still applies.
+detect_test_cmd() {
+  if [ -n "$TEST_CMD" ]; then
+    SCOPE_TEST_CMD="$TEST_CMD"
+    echo "=== test command from repo config: ${SCOPE_TEST_CMD} ==="
+    return 0
+  fi
+  local -a mods=()
+  local f d m
+  # Modules the change is expected to touch, inferred from the scoped files.
+  for f in ${SCOPE_FILES[@]+"${SCOPE_FILES[@]}"}; do
+    d=$(nearest_module_dir "$f") || continue
+    case " ${mods[*]-} " in *" $d "*) ;; *) mods+=("$d") ;; esac
+  done
+  # No scoped files (scoping failed / matched nothing): fall back to the repo's
+  # top-level modules so aider still gets a signal.
+  if [ ${#mods[@]} -eq 0 ]; then
+    while IFS= read -r m; do
+      d=$(dirname "$m"); [ "$d" = "." ] && d=""
+      case " ${mods[*]-} " in *" $d "*) ;; *) mods+=("$d") ;; esac
+    done < <(git ls-files | grep -E '(^|/)(go\.mod|package\.json|pyproject\.toml)$' \
+              | grep -v node_modules | head -20)
+  fi
+  # Chain one `cd`-relative segment per module that yields a command.
+  local cur="" cmd="" sub cd part
+  for d in ${mods[@]+"${mods[@]}"}; do
+    sub=$(module_cmd "$d"); [ -n "$sub" ] || continue
+    cd=$(relpath "$cur" "$d")
+    part=""; [ -n "$cd" ] && part="cd $cd && "
+    part="$part$sub"
+    [ -n "$cmd" ] && cmd="$cmd && $part" || cmd="$part"
+    cur="$d"
+  done
+  SCOPE_TEST_CMD="$cmd"
 }
 
 scope_repo() {
   local listing content json sys user
   listing=$(git ls-files | head -3000)
-  sys='You prepare a coding task for an automated coding agent. Given a feature request and the repository file listing, reply with ONLY a compact JSON object: {"files":["path",...],"test_cmd":"...","notes":"..."}. "files": 5-15 EXISTING paths from the listing that are most relevant — the files that must change, plus key context (routing, templates, similar features, the tests to mirror). "test_cmd": the single fastest shell command that validates a change in the affected area, using only go/npm/npx/node/python/pytest/make, segments joined by &&, "cd <dir> && ..." allowed (e.g. "cd backend && go test ./..."); empty string if unsure. "notes": 2-4 sentences on WHERE the feature belongs and how to implement it idiomatically in this codebase.'
+  sys='You prepare a coding task for an automated coding agent. Given a feature request and the repository file listing, reply with ONLY a compact JSON object: {"files":["path",...],"notes":"..."}. "files": 5-15 EXISTING paths from the listing that are most relevant — the files that must change, plus key context (routing, templates, similar features, the tests to mirror). "notes": 2-4 sentences on WHERE the feature belongs and how to implement it idiomatically in this codebase.'
   user=$(printf 'FEATURE REQUEST:\n%s\n\nREPOSITORY FILE LISTING:\n%s\n' \
     "${AGENT_FEATURE:-$AGENT_PROMPT}" "$listing")
   content=$(deepseek_call "$sys" "$user") || return 0
@@ -217,15 +307,17 @@ scope_repo() {
   while IFS= read -r f; do
     [ -f "$f" ] && SCOPE_FILES+=("$f")
   done < <(echo "$json" | jq -r '.files[]? // empty' 2>/dev/null | head -15)
-  SCOPE_TEST_CMD=$(echo "$json" | jq -r '.test_cmd // ""' 2>/dev/null)
   SCOPE_NOTES=$(echo "$json" | jq -r '.notes // ""' 2>/dev/null)
-  validate_test_cmd
 }
 
 echo "=== scoping the task (${REVIEW_JUDGE_MODEL}) ==="
 scope_repo
-echo "=== scope: ${#SCOPE_FILES[@]} files, test_cmd='${SCOPE_TEST_CMD:-none}' ==="
+echo "=== scope: ${#SCOPE_FILES[@]} files ==="
 [ -n "$SCOPE_NOTES" ] && echo "=== scope notes: ${SCOPE_NOTES} ==="
+# Derive the inner-loop test command from real manifests (runs regardless of
+# whether scoping succeeded, so a failed scope still yields a signal).
+detect_test_cmd
+echo "=== detected test_cmd='${SCOPE_TEST_CMD:-none}' ==="
 
 # The test command is only useful if it can actually run: install the deps every
 # stack it touches, then require it to PASS on the untouched branch. A command
@@ -289,7 +381,11 @@ prepare_python() {
 # auto-test prep and the verify-command baseline check.
 prepare_cmd_deps() {
   local cmd="$1" seg tok dir="."
-  while IFS= read -r seg; do
+  # `|| [ -n "$seg" ]` keeps the LAST segment: sed leaves no trailing newline, so a
+  # plain `while read` would silently drop it — and the final segment of a
+  # cross-stack command is usually the second stack's `npm`/`pytest` test (the very
+  # thing whose deps must be installed and whose script must be checked).
+  while IFS= read -r seg || [ -n "$seg" ]; do
     seg="${seg#"${seg%%[![:space:]]*}"}"      # ltrim
     tok="${seg%% *}"
     case "$tok" in
@@ -590,8 +686,8 @@ done
 # red PR that can never merge is strictly worse.
 #
 # The effective command is the repo-configured VERIFY_CMD, falling back to the
-# model-guessed SCOPE_TEST_CMD (already baseline-green) so even unconfigured repos
-# get one final check of the pushed diff.
+# detected SCOPE_TEST_CMD (already baseline-green) so even unconfigured repos get
+# one final check of the pushed diff.
 EFFECTIVE_VERIFY="${VERIFY_CMD:-$SCOPE_TEST_CMD}"
 
 have_precommit() {

@@ -57,10 +57,13 @@ type Repo struct {
 	Name       string `json:"name"`
 	BaseBranch string `json:"baseBranch"`
 	// VerifyCommand is the repo's authoritative build/lint/test command; the worker
-	// runs it as a hard gate before opening a PR. Empty = use the model-guessed one.
-	VerifyCommand string    `json:"verifyCommand"`
-	AddedBy       *string   `json:"addedBy,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	// runs it as a hard gate before opening a PR. Empty = the worker detects one.
+	VerifyCommand string `json:"verifyCommand"`
+	// TestCommand is the fast inner-loop command the worker feeds aider --auto-test
+	// after every edit. Empty = the worker detects it from the repo's manifests.
+	TestCommand string    `json:"testCommand"`
+	AddedBy     *string   `json:"addedBy,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 // FullName returns "owner/name".
@@ -198,12 +201,12 @@ func (s *Store) UpsertPasswordUser(ctx context.Context, username string) (User, 
 
 // --- repos -------------------------------------------------------------------
 
-const repoCols = `id, owner, name, base_branch, verify_command, added_by, created_at`
+const repoCols = `id, owner, name, base_branch, verify_command, test_command, added_by, created_at`
 
 func scanRepo(row interface{ Scan(...any) error }) (Repo, error) {
 	var r Repo
 	var addedBy sql.NullString
-	err := row.Scan(&r.ID, &r.Owner, &r.Name, &r.BaseBranch, &r.VerifyCommand, &addedBy, &r.CreatedAt)
+	err := row.Scan(&r.ID, &r.Owner, &r.Name, &r.BaseBranch, &r.VerifyCommand, &r.TestCommand, &addedBy, &r.CreatedAt)
 	if addedBy.Valid {
 		r.AddedBy = &addedBy.String
 	}
@@ -211,14 +214,14 @@ func scanRepo(row interface{ Scan(...any) error }) (Repo, error) {
 }
 
 // CreateRepo adds a repository.
-func (s *Store) CreateRepo(ctx context.Context, owner, name, baseBranch, verifyCommand, addedBy string) (Repo, error) {
+func (s *Store) CreateRepo(ctx context.Context, owner, name, baseBranch, verifyCommand, testCommand, addedBy string) (Repo, error) {
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
 	return scanRepo(s.DB.QueryRowContext(ctx, `
-		INSERT INTO repos (owner, name, base_branch, verify_command, added_by)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING `+repoCols, owner, name, baseBranch, verifyCommand, addedBy))
+		INSERT INTO repos (owner, name, base_branch, verify_command, test_command, added_by)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING `+repoCols, owner, name, baseBranch, verifyCommand, testCommand, addedBy))
 }
 
 // ListRepos returns all repos ordered by owner/name.
@@ -241,14 +244,14 @@ func (s *Store) ListRepos(ctx context.Context) ([]Repo, error) {
 
 // UpdateRepo changes a repo's configuration. Returns ErrNotFound if no row
 // matches the given id.
-func (s *Store) UpdateRepo(ctx context.Context, id, owner, name, baseBranch, verifyCommand string) (Repo, error) {
+func (s *Store) UpdateRepo(ctx context.Context, id, owner, name, baseBranch, verifyCommand, testCommand string) (Repo, error) {
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
 	r, err := scanRepo(s.DB.QueryRowContext(ctx, `
-		UPDATE repos SET owner = $2, name = $3, base_branch = $4, verify_command = $5
+		UPDATE repos SET owner = $2, name = $3, base_branch = $4, verify_command = $5, test_command = $6
 		WHERE id = $1
-		RETURNING `+repoCols, id, owner, name, baseBranch, verifyCommand))
+		RETURNING `+repoCols, id, owner, name, baseBranch, verifyCommand, testCommand))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Repo{}, ErrNotFound
 	}

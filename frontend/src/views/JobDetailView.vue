@@ -33,6 +33,7 @@ const metaRows = computed(() => {
   push('Aider timeout', m.aiderTimeoutSec ? `${m.aiderTimeoutSec}s` : undefined)
   push('Base branch', m.baseBranch)
   push('Verify command', m.verifyCommand)
+  push('Test command', m.testCommand)
   return rows
 })
 const canRetry = computed(() => {

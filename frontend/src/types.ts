@@ -14,6 +14,7 @@ export interface Repo {
   name: string
   baseBranch: string
   verifyCommand?: string
+  testCommand?: string
   addedBy?: string
   createdAt: string
 }
@@ -31,6 +32,7 @@ export interface JobMetadata {
   deepseekBaseURL?: string
   baseBranch?: string
   verifyCommand?: string
+  testCommand?: string
 }
 
 export interface Job {

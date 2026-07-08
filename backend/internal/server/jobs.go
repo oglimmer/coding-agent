@@ -73,6 +73,7 @@ func (a *App) jobMetadata(repo Repo) map[string]any {
 		"deepseekBaseURL": a.Cfg.DeepSeekBaseURL,
 		"baseBranch":      repo.BaseBranch,
 		"verifyCommand":   repo.VerifyCommand,
+		"testCommand":     repo.TestCommand,
 	}
 }
 
@@ -182,6 +183,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Feature:       req.Feature,
 		PRTitle:       "feat: " + truncate(req.Feature, 60),
 		VerifyCommand: repo.VerifyCommand,
+		TestCommand:   repo.TestCommand,
 	}
 	if err := a.K8s.Create(r.Context(), spec); err != nil {
 		reason := "failed to start the worker job"

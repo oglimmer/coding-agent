@@ -36,7 +36,8 @@ type JobSpec struct {
 	Prompt        string
 	Feature       string
 	PRTitle       string
-	VerifyCommand string // repo's build/lint/test gate; empty = worker guesses one
+	VerifyCommand string // repo's build/lint/test gate; empty = worker detects one
+	TestCommand   string // repo's fast inner-loop test cmd; empty = worker detects one
 }
 
 // Options configure how Jobs are built (image, secrets, resource wiring).
@@ -142,6 +143,7 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		{Name: "AGENT_FEATURE", Value: spec.Feature},
 		{Name: "AGENT_PR_TITLE", Value: spec.PRTitle},
 		{Name: "AGENT_VERIFY_CMD", Value: spec.VerifyCommand},
+		{Name: "AGENT_TEST_CMD", Value: spec.TestCommand},
 		{Name: "AIDER_MODEL", Value: opts.Model},
 		{Name: "AIDER_EDITOR_MODEL", Value: opts.EditorModel},
 		{Name: "DEEPSEEK_BASE_URL", Value: opts.DeepSeekBaseURL},

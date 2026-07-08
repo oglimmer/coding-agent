@@ -16,6 +16,7 @@ const owner = ref('')
 const name = ref('')
 const baseBranch = ref('main')
 const verifyCommand = ref('')
+const testCommand = ref('')
 const formError = ref<string | null>(null)
 const submitting = ref(false)
 
@@ -28,11 +29,13 @@ async function addRepo() {
       name.value.trim(),
       baseBranch.value.trim() || 'main',
       verifyCommand.value.trim(),
+      testCommand.value.trim(),
     )
     owner.value = ''
     name.value = ''
     baseBranch.value = 'main'
     verifyCommand.value = ''
+    testCommand.value = ''
     await reload()
   } catch (e) {
     formError.value = errMsg(e)
@@ -46,6 +49,7 @@ const editOwner = ref('')
 const editName = ref('')
 const editBaseBranch = ref('')
 const editVerifyCommand = ref('')
+const editTestCommand = ref('')
 const editError = ref<string | null>(null)
 const editSaving = ref(false)
 
@@ -55,6 +59,7 @@ function startEdit(repo: Repo) {
   editName.value = repo.name
   editBaseBranch.value = repo.baseBranch
   editVerifyCommand.value = repo.verifyCommand ?? ''
+  editTestCommand.value = repo.testCommand ?? ''
   editError.value = null
 }
 
@@ -73,6 +78,7 @@ async function saveEdit(repo: Repo) {
       editName.value.trim(),
       editBaseBranch.value.trim() || 'main',
       editVerifyCommand.value.trim(),
+      editTestCommand.value.trim(),
     )
     editingId.value = null
     await reload()
@@ -137,7 +143,21 @@ function requestFeature(repo: Repo) {
           >
           <p class="hint">
             The build/lint/test command the agent must pass locally before opening a PR —
-            use the same one your CI runs. Leave empty to let the agent guess.
+            use the same one your CI runs. Leave empty to let the agent detect one.
+          </p>
+        </div>
+        <div class="f wide">
+          <label class="label" for="t">Test command <span class="muted">(optional)</span></label>
+          <input
+            id="t"
+            v-model="testCommand"
+            class="input"
+            placeholder="cd backend && go test ./..."
+          >
+          <p class="hint">
+            A fast command run after every edit as the agent's convergence signal. Keep it
+            quick (skip Docker/e2e). Leave empty to let the agent detect it from the repo's
+            manifests.
           </p>
         </div>
       </form>
@@ -202,6 +222,14 @@ function requestFeature(repo: Repo) {
                   placeholder="npm run lint && npm run build && npm test"
                 >
               </div>
+              <div class="f wide">
+                <label class="label">Test command <span class="muted">(optional)</span></label>
+                <input
+                  v-model="editTestCommand"
+                  class="input"
+                  placeholder="cd backend && go test ./..."
+                >
+              </div>
             </div>
             <p v-if="editError" class="error-banner" style="margin-top: 0.75rem">{{ editError }}</p>
             <div class="actions" style="margin-top: 0.75rem">
@@ -215,6 +243,7 @@ function requestFeature(repo: Repo) {
             <div class="repo-name">{{ repo.owner }}/{{ repo.name }}</div>
             <div class="muted small">base: {{ repo.baseBranch }}</div>
             <div v-if="repo.verifyCommand" class="muted small verify">verify: <code>{{ repo.verifyCommand }}</code></div>
+            <div v-if="repo.testCommand" class="muted small verify">test: <code>{{ repo.testCommand }}</code></div>
           </div>
           <div class="actions">
             <button v-if="auth.canWrite" class="btn btn-primary" @click="requestFeature(repo)">Request feature</button>

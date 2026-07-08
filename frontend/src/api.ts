@@ -86,10 +86,10 @@ export const api = {
   me: () => request<User>('GET', '/me'),
 
   listRepos: () => request<Repo[]>('GET', '/repos'),
-  createRepo: (owner: string, name: string, baseBranch: string, verifyCommand: string) =>
-    request<Repo>('POST', '/repos', { owner, name, baseBranch, verifyCommand }),
-  updateRepo: (id: string, owner: string, name: string, baseBranch: string, verifyCommand: string) =>
-    request<Repo>('PUT', `/repos/${id}`, { owner, name, baseBranch, verifyCommand }),
+  createRepo: (owner: string, name: string, baseBranch: string, verifyCommand: string, testCommand: string) =>
+    request<Repo>('POST', '/repos', { owner, name, baseBranch, verifyCommand, testCommand }),
+  updateRepo: (id: string, owner: string, name: string, baseBranch: string, verifyCommand: string, testCommand: string) =>
+    request<Repo>('PUT', `/repos/${id}`, { owner, name, baseBranch, verifyCommand, testCommand }),
   deleteRepo: (id: string) => request<void>('DELETE', `/repos/${id}`),
 
   listJobs: (all = false) => request<Job[]>('GET', `/jobs${all ? '?all=true' : ''}`),
