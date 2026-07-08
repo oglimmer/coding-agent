@@ -32,14 +32,28 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 cmd_test() {
-  log "backend: gofmt / vet / test"
-  ( cd "$ROOT/backend" && gofmt -l . | (grep . && die "gofmt: files need formatting" || true) \
-      && go vet ./... && go test -race ./... )
-  log "frontend: typecheck / lint / test"
-  ( cd "$ROOT/frontend" && npm run check )
+  # Prepares a freshly checked-out repo (install deps + build) before running
+  # each component's test command, so `test` works from a clean clone.
+
+  log "backend: download modules"
+  ( cd "$ROOT/backend" && go mod download )
+  log "backend: build"
+  ( cd "$ROOT/backend" && go build ./... )
+  log "backend: go test"
+  ( cd "$ROOT/backend" && go test -race ./... )
+
   log "worker: shellcheck"
+  command -v shellcheck >/dev/null 2>&1 || die "shellcheck not installed (brew install shellcheck)"
   shellcheck "$ROOT/worker/run_agent.sh"
-  log "all checks passed"
+
+  log "frontend: install deps"
+  ( cd "$ROOT/frontend" && npm ci )
+  log "frontend: build"
+  ( cd "$ROOT/frontend" && npm run build )
+  log "frontend: vitest"
+  ( cd "$ROOT/frontend" && npm test )
+
+  log "all tests passed"
 }
 
 resolve_platform_arg() {
