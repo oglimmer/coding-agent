@@ -239,6 +239,22 @@ func (s *Store) ListRepos(ctx context.Context) ([]Repo, error) {
 	return out, rows.Err()
 }
 
+// UpdateRepo changes a repo's configuration. Returns ErrNotFound if no row
+// matches the given id.
+func (s *Store) UpdateRepo(ctx context.Context, id, owner, name, baseBranch, verifyCommand string) (Repo, error) {
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	r, err := scanRepo(s.DB.QueryRowContext(ctx, `
+		UPDATE repos SET owner = $2, name = $3, base_branch = $4, verify_command = $5
+		WHERE id = $1
+		RETURNING `+repoCols, id, owner, name, baseBranch, verifyCommand))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Repo{}, ErrNotFound
+	}
+	return r, err
+}
+
 // RepoByID resolves a repo by primary key.
 func (s *Store) RepoByID(ctx context.Context, id string) (Repo, error) {
 	r, err := scanRepo(s.DB.QueryRowContext(ctx, `SELECT `+repoCols+` FROM repos WHERE id = $1`, id))

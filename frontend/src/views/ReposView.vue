@@ -41,6 +41,48 @@ async function addRepo() {
   }
 }
 
+const editingId = ref<string | null>(null)
+const editOwner = ref('')
+const editName = ref('')
+const editBaseBranch = ref('')
+const editVerifyCommand = ref('')
+const editError = ref<string | null>(null)
+const editSaving = ref(false)
+
+function startEdit(repo: Repo) {
+  editingId.value = repo.id
+  editOwner.value = repo.owner
+  editName.value = repo.name
+  editBaseBranch.value = repo.baseBranch
+  editVerifyCommand.value = repo.verifyCommand ?? ''
+  editError.value = null
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editError.value = null
+}
+
+async function saveEdit(repo: Repo) {
+  editSaving.value = true
+  editError.value = null
+  try {
+    await api.updateRepo(
+      repo.id,
+      editOwner.value.trim(),
+      editName.value.trim(),
+      editBaseBranch.value.trim() || 'main',
+      editVerifyCommand.value.trim(),
+    )
+    editingId.value = null
+    await reload()
+  } catch (e) {
+    editError.value = errMsg(e)
+  } finally {
+    editSaving.value = false
+  }
+}
+
 async function removeRepo(repo: Repo) {
   const ok = await confirm({
     title: 'Remove repository',
@@ -137,14 +179,49 @@ function requestFeature(repo: Repo) {
 
     <ul v-else class="list">
       <li v-for="repo in repos" :key="repo.id" class="card item">
-        <div class="info">
-          <div class="repo-name">{{ repo.owner }}/{{ repo.name }}</div>
-          <div class="muted small">base: {{ repo.baseBranch }}</div>
-        </div>
-        <div class="actions">
-          <button v-if="auth.canWrite" class="btn btn-primary" @click="requestFeature(repo)">Request feature</button>
-          <button v-if="auth.isAdmin" class="btn btn-danger" @click="removeRepo(repo)">Remove</button>
-        </div>
+        <template v-if="editingId === repo.id">
+          <form class="edit" @submit.prevent="saveEdit(repo)">
+            <div class="row">
+              <div class="f">
+                <label class="label">Owner</label>
+                <input v-model="editOwner" class="input" placeholder="oglimmer">
+              </div>
+              <div class="f">
+                <label class="label">Name</label>
+                <input v-model="editName" class="input" placeholder="my-repo">
+              </div>
+              <div class="f narrow">
+                <label class="label">Base branch</label>
+                <input v-model="editBaseBranch" class="input" placeholder="main">
+              </div>
+              <div class="f wide">
+                <label class="label">Verify command <span class="muted">(optional)</span></label>
+                <input
+                  v-model="editVerifyCommand"
+                  class="input"
+                  placeholder="npm run lint && npm run build && npm test"
+                >
+              </div>
+            </div>
+            <p v-if="editError" class="error-banner" style="margin-top: 0.75rem">{{ editError }}</p>
+            <div class="actions" style="margin-top: 0.75rem">
+              <button class="btn btn-primary" :disabled="editSaving || !editOwner" type="submit">Save</button>
+              <button class="btn" type="button" :disabled="editSaving" @click="cancelEdit">Cancel</button>
+            </div>
+          </form>
+        </template>
+        <template v-else>
+          <div class="info">
+            <div class="repo-name">{{ repo.owner }}/{{ repo.name }}</div>
+            <div class="muted small">base: {{ repo.baseBranch }}</div>
+            <div v-if="repo.verifyCommand" class="muted small verify">verify: <code>{{ repo.verifyCommand }}</code></div>
+          </div>
+          <div class="actions">
+            <button v-if="auth.canWrite" class="btn btn-primary" @click="requestFeature(repo)">Request feature</button>
+            <button v-if="auth.isAdmin" class="btn" @click="startEdit(repo)">Edit</button>
+            <button v-if="auth.isAdmin" class="btn btn-danger" @click="removeRepo(repo)">Remove</button>
+          </div>
+        </template>
       </li>
     </ul>
   </div>
@@ -226,9 +303,21 @@ function requestFeature(repo: Repo) {
   justify-content: space-between;
   gap: 1rem;
 }
+.edit {
+  flex: 1 1 100%;
+}
 .repo-name {
   font-weight: 600;
   font-size: 1.05rem;
+}
+.verify {
+  margin-top: 0.15rem;
+}
+.verify code {
+  font-size: 0.82em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--bg);
 }
 .small {
   font-size: 0.82rem;

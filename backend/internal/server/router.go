@@ -83,6 +83,7 @@ func NewRouter(a *App) http.Handler {
 				r.Use(a.requireAdminMiddleware)
 
 				r.Post("/repos", a.handleCreateRepo)
+				r.Put("/repos/{id}", a.handleUpdateRepo)
 				r.Delete("/repos/{id}", a.handleDeleteRepo)
 
 				r.Get("/admin/users", a.handleListUsers)

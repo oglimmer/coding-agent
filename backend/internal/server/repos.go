@@ -10,6 +10,30 @@ import (
 
 var repoPartRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
+// repoInput is the shared create/update request body.
+type repoInput struct {
+	Owner         string `json:"owner"`
+	Name          string `json:"name"`
+	BaseBranch    string `json:"baseBranch"`
+	VerifyCommand string `json:"verifyCommand"`
+}
+
+// normalize trims the fields and accepts an "owner/name" string pasted into the
+// owner field for convenience. It reports whether owner and name are valid
+// GitHub identifiers.
+func (in *repoInput) normalize() bool {
+	in.Owner = strings.TrimSpace(in.Owner)
+	in.Name = strings.TrimSpace(in.Name)
+	in.BaseBranch = strings.TrimSpace(in.BaseBranch)
+	in.VerifyCommand = strings.TrimSpace(in.VerifyCommand)
+
+	if in.Name == "" && strings.Contains(in.Owner, "/") {
+		parts := strings.SplitN(in.Owner, "/", 2)
+		in.Owner, in.Name = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return repoPartRe.MatchString(in.Owner) && repoPartRe.MatchString(in.Name)
+}
+
 // handleListRepos returns every configured repo (any authenticated user).
 func (a *App) handleListRepos(w http.ResponseWriter, r *http.Request) {
 	repos, err := a.Store.ListRepos(r.Context())
@@ -26,27 +50,12 @@ func (a *App) handleListRepos(w http.ResponseWriter, r *http.Request) {
 // handleCreateRepo adds a repo (admin only).
 func (a *App) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFromContext(r.Context())
-	var req struct {
-		Owner         string `json:"owner"`
-		Name          string `json:"name"`
-		BaseBranch    string `json:"baseBranch"`
-		VerifyCommand string `json:"verifyCommand"`
-	}
+	var req repoInput
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.Owner = strings.TrimSpace(req.Owner)
-	req.Name = strings.TrimSpace(req.Name)
-	req.BaseBranch = strings.TrimSpace(req.BaseBranch)
-	req.VerifyCommand = strings.TrimSpace(req.VerifyCommand)
-
-	// Accept "owner/name" pasted into the owner field for convenience.
-	if req.Name == "" && strings.Contains(req.Owner, "/") {
-		parts := strings.SplitN(req.Owner, "/", 2)
-		req.Owner, req.Name = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-	}
-	if !repoPartRe.MatchString(req.Owner) || !repoPartRe.MatchString(req.Name) {
+	if !req.normalize() {
 		writeErr(w, http.StatusBadRequest, "owner and name are required and must be valid GitHub identifiers")
 		return
 	}
@@ -61,6 +70,34 @@ func (a *App) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, repo)
+}
+
+// handleUpdateRepo changes an existing repo's configuration (admin only).
+func (a *App) handleUpdateRepo(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req repoInput
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !req.normalize() {
+		writeErr(w, http.StatusBadRequest, "owner and name are required and must be valid GitHub identifiers")
+		return
+	}
+
+	repo, err := a.Store.UpdateRepo(r.Context(), id, req.Owner, req.Name, req.BaseBranch, req.VerifyCommand)
+	if err != nil {
+		switch {
+		case err == ErrNotFound:
+			writeErr(w, http.StatusNotFound, "repository not found")
+		case isUniqueViolation(err):
+			writeErr(w, http.StatusConflict, "that repository is already configured")
+		default:
+			a.serverErr(w, r, err, "")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, repo)
 }
 
 // handleDeleteRepo removes a repo (admin only).
