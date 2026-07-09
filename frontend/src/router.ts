@@ -21,6 +21,11 @@ const router = createRouter({
       component: () => import('@/views/OidcCallbackView.vue'),
       meta: { hideChrome: true },
     },
+    {
+      path: '/pending',
+      component: () => import('@/views/PendingView.vue'),
+      meta: { requiresAuth: true, hideChrome: true },
+    },
     { path: '/repos', component: () => import('@/views/ReposView.vue'), meta: { requiresAuth: true } },
     { path: '/new', component: () => import('@/views/NewJobView.vue'), meta: { requiresAuth: true, requiresWrite: true } },
     {
@@ -64,6 +69,15 @@ router.beforeEach(async (to) => {
       return { path: '/login', query: { redirect: to.fullPath } }
     }
     return { path: '/error', query: { code: '500' } }
+  }
+
+  // Viewers (review-only) have no access yet: hold them on the pending screen
+  // and keep everyone else off it.
+  if (auth.isPending) {
+    return to.path === '/pending' ? true : { path: '/pending' }
+  }
+  if (to.path === '/pending') {
+    return { path: '/repos' }
   }
 
   if (to.meta.requiresAdmin && !auth.isAdmin) {

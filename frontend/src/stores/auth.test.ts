@@ -19,20 +19,22 @@ describe('useAuthStore', () => {
     expect(auth.canWrite).toBe(false)
   })
 
-  it('treats a viewer as read-only', () => {
+  it('treats a viewer as read-only and pending', () => {
     const auth = useAuthStore()
     const token = makeJwt(Math.floor(Date.now() / 1000) + 3600)
     auth.setSession(token, { id: '2', email: 'v@b.c', name: 'V', role: 'viewer', createdAt: '' })
     expect(auth.isAdmin).toBe(false)
     expect(auth.canWrite).toBe(false)
+    expect(auth.isPending).toBe(true)
   })
 
-  it('treats a user as a writer but not admin', () => {
+  it('treats a user as a writer but not admin or pending', () => {
     const auth = useAuthStore()
     const token = makeJwt(Math.floor(Date.now() / 1000) + 3600)
     auth.setSession(token, { id: '3', email: 'u@b.c', name: 'U', role: 'user', createdAt: '' })
     expect(auth.isAdmin).toBe(false)
     expect(auth.canWrite).toBe(true)
+    expect(auth.isPending).toBe(false)
   })
 
   it('sets and persists a session', () => {
