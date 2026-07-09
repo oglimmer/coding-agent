@@ -127,6 +127,27 @@ NOT DONE (deferred, needs a decision or is lower value):
   `-L` drops the auth header on the cross-host redirect so the token is not
   leaked. Providers other than GitHub Actions 404 and degrade to annotations.
 
+### 1.5 Review convergence — the reviewer never approves  ⬅ from job 2f012766 (aider+Claude)
+
+Once the coding model became strong enough (aider on Claude) to produce a
+building, test-green PR, the failure moved entirely into the review loop: the
+PR was correct but `oglimmer/review-action` requested changes every round and
+never approved, burning all `REVIEW_MAX_ROUNDS`. Root cause was in the reviewer,
+not here: it re-reviewed each push **statelessly**, surfacing a fresh (often
+contradictory) nit per round — round 3 flagged "unbounded log loading", the fix
+added a 500-cap, the final round flagged the 500-cap as "contradicting complete
+details". No model can converge against that. Fixed in the *review-action* repo:
+it now (a) returns an explicit `approve`/`request_changes` **verdict** with
+severity discipline (design/completeness preferences are non-blocking), (b) is
+fed the prior round's findings so it stops re-litigating resolved points, and
+(c) submits a real `APPROVE`/`REQUEST_CHANGES` review. The worker already merges
+on a formal `APPROVED` for the head sha, so that alone closes the loop. Worker
+side (this repo): `verdict_from_marker` reads review-action's machine-readable
+`<!-- review-verdict:… reviewed-sha:… -->` marker as the authoritative signal in
+the no-formal-verdict branch, ahead of the DeepSeek prose judge (which is lossy
+and biased to `needs_changes`). The prose judge remains the last-resort fallback
+for reviewers that don't emit the marker.
+
 ---
 
 ## Phase 1 — review-loop convergence (turns "work done" into "job failed")

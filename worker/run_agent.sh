@@ -897,6 +897,28 @@ fetch_review_summary() {
          | (.body // "(no summary)") | gsub("<!--[^>]*-->"; "") | gsub("^\\s+|\\s+$"; "")'
 }
 
+# review-action embeds a machine-readable verdict in its sticky summary comment:
+#   <!-- review-verdict:<approve|request_changes> reviewed-sha:<sha> blocking:<n> -->
+# It is the reviewer's OWN explicit verdict for a specific commit, so prefer it
+# over re-classifying the prose with a model (which is lossy and biased). Echoes
+# "approve" | "needs_changes", or "" when the marker is absent or was written for
+# a different commit than the one under review.
+verdict_from_marker() {
+  local head_sha="$1" line v sha
+  line=$(gh_api GET "${API}/issues/${PR_NUMBER}/comments?per_page=100" \
+    | jq -r --arg m "$REVIEW_SUMMARY_MARKER" \
+        '[.[] | select((.body // "") | contains($m))] | last | .body // ""' \
+    | grep -oE '<!-- review-verdict:[a-z_]+ reviewed-sha:[0-9a-f]* blocking:[0-9]+ -->' | tail -1)
+  [ -n "$line" ] || return 0
+  v=$(printf '%s' "$line"  | sed -n 's/.*review-verdict:\([a-z_]*\).*/\1/p')
+  sha=$(printf '%s' "$line" | sed -n 's/.*reviewed-sha:\([0-9a-f]*\).*/\1/p')
+  [ -n "$sha" ] && [ "$sha" != "$head_sha" ] && return 0   # stale marker; ignore
+  case "$v" in
+    approve)         echo "approve" ;;
+    request_changes) echo "needs_changes" ;;
+  esac
+}
+
 # Wait until the head commit's check runs are complete AND the reviewer has
 # responded (its sticky summary comment is present) — or a check has already
 # failed, which is actionable on its own. We must not hang waiting for a formal
@@ -1084,9 +1106,18 @@ for attempt in $(seq 0 "$REVIEW_MAX_ROUNDS"); do
       APPROVED) decision="merge" ;;
       CHANGES_REQUESTED) decision="fix" ;;
       *)
-        echo "=== no formal verdict; classifying review prose (${REVIEW_JUDGE_MODEL}) ==="
-        judge_review
-        echo "=== review judge: ${JUDGE_VERDICT} — ${JUDGE_REASON} ==="
+        # Prefer the reviewer's own machine-readable verdict for THIS commit
+        # (review-action marker) over re-classifying prose with the judge model.
+        marker_verdict=$(verdict_from_marker "$HEAD_SHA")
+        if [ -n "$marker_verdict" ]; then
+          JUDGE_VERDICT="$marker_verdict"
+          JUDGE_REASON="from review-action verdict marker"
+          echo "=== review verdict (marker): ${JUDGE_VERDICT} ==="
+        else
+          echo "=== no formal verdict; classifying review prose (${REVIEW_JUDGE_MODEL}) ==="
+          judge_review
+          echo "=== review judge: ${JUDGE_VERDICT} — ${JUDGE_REASON} ==="
+        fi
         [ "$JUDGE_VERDICT" = "approve" ] && decision="merge"
         ;;
     esac
