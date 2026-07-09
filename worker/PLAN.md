@@ -12,8 +12,8 @@ Legend: **Problem** what goes wrong · **Where** anchor · **Fix** approach ·
 ## Implementation status (branch `harden-worker`)
 
 DONE (implemented + shellcheck-clean + unit-tested logic): 1.1, 1.2, 1.3, 1.4,
-2.1, 2.2, 3.1, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 4.1, 4.3. Line anchors below refer to
-the ORIGINAL `a50718a` layout and are now stale — see the current file.
+2.1, 2.2, 3.1, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.1, 4.3. Line anchors below
+refer to the ORIGINAL `a50718a` layout and are now stale — see the current file.
 
 Note on 3.5/3.6: those items hardened the *model-guessed* test command (validate
 `npm run <script>`, add a compile/vet fallback). 3.8 supersedes their premise —
@@ -58,6 +58,44 @@ removing the model as a source and detecting the command deterministically:
   `npm run test`, not `test:unit`; `prepare_cmd_deps` reaches the frontend segment
   (installs deps, checks the script) and rejects a hallucinated last-segment
   script. Backend `go build`/`vet`/`test` and frontend `npm run check` green.
+
+### 3.9 A hanging test/verify command kills the round with nothing committed  ⬅ from job 3d59189a
+
+Root cause of the `aider timed out before committing any work` class: 3.8 made the
+test command real and terminating-*by-name*, but never guaranteed it *terminates
+at runtime*. Job `3d59189a` (repo `oglimmer/irl-planner-pro`) is canonical — the
+detected inner-loop command `cd backend && go test ./... && cd ../frontend && npm
+run test` ran, `go test` passed, then the frontend `npm run test` (vitest) hung
+(`[vitest-pool]: Timeout terminating forks worker …`). aider's `--auto-test`
+subprocess blocked on it, the whole 3600s `AIDER_TIMEOUT` round was hard-killed,
+and because the one applied edit was never committed, 2.1's preserve-work salvage
+had nothing to push → job failed, no PR. Session cost `$0.03`: almost the entire
+hour was a wedged test process, not model work.
+- **3.9a** New `bounded_runner RAW SECS`: writes RAW to a file (so the wrapper
+  never re-quotes the compound `&&`/`cd`/embedded-quote command) and echoes
+  `env CI=1 CI=true FORCE_COLOR=0 timeout --signal=TERM --kill-after=10 SECS bash <file>`.
+  `CI=true` flips vitest/jest/react-scripts out of watch mode (the #1 non-return
+  cause) and keeps npm non-interactive; `timeout` guarantees even a wedged process
+  (a fork-teardown deadlock — which CI mode does NOT prevent) is killed and the
+  runner exits non-zero. A hang therefore degrades to "this round's test failed",
+  never a dead job. New tunables `AGENT_TEST_TIMEOUT` (inner loop, default 300s)
+  and `AGENT_VERIFY_TIMEOUT` (heavy gate, default 1200s).
+- **3.9b** Every execution site now runs through `bounded_runner`, while the
+  parsing helpers (`prepare_cmd_deps`, `check_npm_script`) still see the RAW
+  command: the inner-loop baseline check, the zero-config fallback-gate baseline,
+  aider's `--test-cmd` (`SCOPE_TEST_RUNNER`, built once and reused across rounds),
+  the `VERIFY_CMD` baseline check, and `run_verify`'s `EFFECTIVE_VERIFY`. A hang
+  can no longer stall the job at setup, inside the aider loop, or at the gate.
+- **Verify:** `bounded_runner` unit-tested — a `sleep 30` bounded to 2s returns
+  rc 124 in ~2s; `CI` is exported to the command; a compound `cd a && … && cd
+  ../b && false` passes through with cwd changes and propagates the non-zero exit;
+  single/double quotes in the command survive; a fast command returns 0 promptly.
+  shellcheck-clean.
+- **Not fixed by 3.9 (the deeper issue):** this stack keeps dying in its own
+  scaffolding rather than on code quality. 3.9 removes the hang failure mode but
+  the `deepseek-v4-pro` + aider engine remains the real ceiling — see the
+  engine-swap discussion (Claude Agent SDK / stronger AIDER_MODEL) as the
+  higher-leverage change.
 
 ### 3.7 Cross-stack deps: cd-path bug + pre-commit tooling  ⬅ from job 874b4401
 

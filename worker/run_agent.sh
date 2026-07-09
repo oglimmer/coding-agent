@@ -80,6 +80,15 @@ VERIFY_CMD="${AGENT_VERIFY_CMD:-}"
 # detect it from the repo's manifests. Lets an owner override detection for a
 # non-standard setup without making their heavy VERIFY_CMD run after every edit.
 TEST_CMD="${AGENT_TEST_CMD:-}"
+# Per-invocation caps for command execution. A test/verify script that HANGS
+# (vitest/jest watch mode, a fork-teardown deadlock — job 3d59189a) blocks the
+# subprocess indefinitely: aider's --auto-test then rides out the whole
+# AIDER_TIMEOUT round and is killed with nothing committed, or the verify gate
+# stalls forever. Every command is run bounded (below) so a hang degrades to a
+# failed round, never a dead job. TEST_TIMEOUT bounds the fast inner loop;
+# VERIFY_TIMEOUT the heavier authoritative gate (clean build + full suite).
+TEST_TIMEOUT="${AGENT_TEST_TIMEOUT:-300}"
+VERIFY_TIMEOUT="${AGENT_VERIFY_TIMEOUT:-1200}"
 VERIFY_MAX_ROUNDS="${VERIFY_MAX_ROUNDS:-2}"
 REPO_DIR=/work/repo
 API="https://api.github.com/repos/${AGENT_REPO:-}"
@@ -172,6 +181,7 @@ echo "repo:           ${AGENT_REPO}  base=${BASE_BRANCH}"
 echo "model:          ${AIDER_MODEL}  editor=${AIDER_EDITOR_MODEL}"
 echo "helper_models:  scope=${SCOPE_MODEL}  judge=${REVIEW_JUDGE_MODEL}"
 echo "review_rounds:  ${REVIEW_MAX_ROUNDS}  verify_rounds=${VERIFY_MAX_ROUNDS}  aider_timeout=${AIDER_TIMEOUT}s"
+echo "cmd_timeouts:   test=${TEST_TIMEOUT}s  verify=${VERIFY_TIMEOUT}s (CI mode, bounded per invocation)"
 echo "verify_cmd:     ${VERIFY_CMD:-<detected>}"
 echo "test_cmd:       ${TEST_CMD:-<detected>}"
 echo "deepseek_base:  ${DEEPSEEK_BASE_URL}"
@@ -338,6 +348,29 @@ disable_auto_test() {
   SCOPE_TEST_CMD=""
 }
 
+# Wrap a raw (possibly compound, multi-`cd`) test/verify command into a bounded,
+# non-interactive runner and echo the runner command. Two guards, both aimed at
+# the hang that killed job 3d59189a:
+#   * CI=true / CI=1 flips vitest, jest and react-scripts out of watch mode — the
+#     single most common reason `npm run test` never returns — and keeps npm and
+#     other tools non-interactive.
+#   * `timeout` guarantees that even a genuinely wedged process (e.g. a vitest
+#     fork-teardown deadlock, which CI mode does NOT prevent) is killed and the
+#     runner exits non-zero, so a hang becomes "this round's test failed" instead
+#     of blocking aider's --auto-test until the whole AIDER_TIMEOUT round dies.
+# The raw command is written to a file so the wrapper never has to re-quote its
+# `&&` / embedded quotes; callers pass the file through `bash`. Parsing helpers
+# (prepare_cmd_deps, check_npm_script) still see the RAW command, never this.
+BOUNDED_SEQ=0
+bounded_runner() {
+  local raw="$1" secs="$2" f
+  BOUNDED_SEQ=$((BOUNDED_SEQ + 1))
+  f="/work/cmd-${BOUNDED_SEQ}.sh"
+  printf '%s\n' "$raw" >"$f"
+  printf 'env CI=1 CI=true FORCE_COLOR=0 timeout --signal=TERM --kill-after=10 %s bash %s' \
+    "$secs" "$f"
+}
+
 # Install node deps in DIR when it has a package.json and no node_modules yet.
 prepare_npm_dir() {
   local dir="$1"
@@ -419,8 +452,8 @@ prepare_cmd_deps() {
 prepare_test_cmd() {
   [ -n "$SCOPE_TEST_CMD" ] || return 0
   prepare_cmd_deps "$SCOPE_TEST_CMD" || { disable_auto_test "test-command setup failed"; return 0; }
-  echo "=== verifying test command on clean baseline ==="
-  if bash -c "$SCOPE_TEST_CMD" >/work/baseline-test.log 2>&1; then
+  echo "=== verifying test command on clean baseline (bounded ${TEST_TIMEOUT}s, CI mode) ==="
+  if bash -c "$(bounded_runner "$SCOPE_TEST_CMD" "$TEST_TIMEOUT")" >/work/baseline-test.log 2>&1; then
     echo "=== baseline green: auto-test enabled ==="
   else
     echo "=== test command fails on baseline; disabling auto-test ==="
@@ -438,7 +471,7 @@ prepare_test_cmd
 if [ -n "$VERIFY_CMD" ]; then
   echo "=== checking repo verify command on clean baseline: ${VERIFY_CMD} ==="
   prepare_cmd_deps "$VERIFY_CMD" || true
-  if bash -c "$VERIFY_CMD" >/work/verify-baseline.log 2>&1; then
+  if bash -c "$(bounded_runner "$VERIFY_CMD" "$VERIFY_TIMEOUT")" >/work/verify-baseline.log 2>&1; then
     echo "=== verify command green at baseline ==="
   else
     echo "=== repo verify command is RED at baseline ==="
@@ -470,7 +503,7 @@ derive_fallback_test_cmd() {
   fi
   [ -n "$cand" ] || return 0
   echo "=== no test command; trying zero-config fallback gate: ${cand} ==="
-  if bash -c "$cand" >/work/fallback-test.log 2>&1; then
+  if bash -c "$(bounded_runner "$cand" "$TEST_TIMEOUT")" >/work/fallback-test.log 2>&1; then
     echo "=== fallback gate green: using it as the aider test loop ==="
     SCOPE_TEST_CMD="$cand"
   else
@@ -479,6 +512,12 @@ derive_fallback_test_cmd() {
   fi
 }
 derive_fallback_test_cmd
+
+# The inner-loop command aider actually runs: the settled SCOPE_TEST_CMD wrapped
+# so a hang can never eat a whole round (see bounded_runner). Built once and
+# reused across every aider round.
+SCOPE_TEST_RUNNER=""
+[ -n "$SCOPE_TEST_CMD" ] && SCOPE_TEST_RUNNER=$(bounded_runner "$SCOPE_TEST_CMD" "$TEST_TIMEOUT")
 
 # --- aider ---------------------------------------------------------------------
 # Per-model overrides: temperature + frequency penalty keep DeepSeek out of
@@ -524,7 +563,7 @@ run_aider() {
   local extra=()
   [ "$AIDER_RESTORE" = "yes" ] && extra+=(--restore-chat-history)
   if [ -n "$SCOPE_TEST_CMD" ]; then
-    extra+=(--auto-test --test-cmd "$SCOPE_TEST_CMD")
+    extra+=(--auto-test --test-cmd "$SCOPE_TEST_RUNNER")
   fi
   timeout --signal=TERM --kill-after=30 "$AIDER_TIMEOUT" aider \
     --model "$AIDER_MODEL" \
@@ -716,8 +755,8 @@ run_verify() {
     fi
   fi
   if [ -n "$EFFECTIVE_VERIFY" ]; then
-    echo "=== verify: ${EFFECTIVE_VERIFY} ===" | tee -a /work/verify.log
-    bash -c "$EFFECTIVE_VERIFY" >>/work/verify.log 2>&1 || rc=$?
+    echo "=== verify: ${EFFECTIVE_VERIFY} (bounded ${VERIFY_TIMEOUT}s, CI mode) ===" | tee -a /work/verify.log
+    bash -c "$(bounded_runner "$EFFECTIVE_VERIFY" "$VERIFY_TIMEOUT")" >>/work/verify.log 2>&1 || rc=$?
   fi
   return $rc
 }
