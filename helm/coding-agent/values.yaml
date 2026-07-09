@@ -6,7 +6,10 @@
 #   POSTGRES_PASSWORD     bundled Postgres password (when postgres.enabled)
 #   DATABASE_URL          full DSN when using an external database
 #   OIDC_CLIENT_SECRET    OIDC client secret (when auth.mode=oidc)
-#   DEEPSEEK_API_KEY      DeepSeek API key (harmful-content gate + worker model)
+#   DEEPSEEK_API_KEY      DeepSeek API key (harmful-content gate + helper calls,
+#                         and the worker model when worker.model is a deepseek/ one)
+#   ANTHROPIC_API_KEY     Anthropic API key — required when worker.model /
+#                         worker.editorModel is a claude model (optional otherwise)
 #   WORKER_GITHUB_TOKEN   GitHub token the worker uses to push/PR/merge
 
 nameOverride: ""
@@ -46,8 +49,12 @@ worker:
   imagePullPolicy: "Always"
   # Aider runs in architect mode: `model` plans the change, `editorModel` turns
   # the plan into precise edits. Splitting the two is aider's main quality lever.
-  model: "deepseek/deepseek-v4-pro"
-  editorModel: "deepseek/deepseek-chat"
+  # Running aider on Claude (requires ANTHROPIC_API_KEY in the worker secret).
+  # The `anthropic/` prefix routes via LiteLLM; the worker auto-disables the
+  # temperature/frequency_penalty knobs Claude rejects. Revert to
+  # deepseek/deepseek-v4-pro + deepseek/deepseek-chat to go back to DeepSeek.
+  model: "anthropic/claude-opus-4-8"
+  editorModel: "anthropic/claude-sonnet-5"
   # Reviewer login the worker treats as "self" when waiting for the PR review.
   githubBotLogin: "coding-agent-bot"
   reviewMaxRounds: 3

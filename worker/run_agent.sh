@@ -21,9 +21,14 @@
 #                       empty = detect it from the repo's manifests
 #   VERIFY_MAX_ROUNDS   corrective aider rounds for the verify gate (default: 2)
 #   AIDER_MODEL         architect (planning) model, default: deepseek/deepseek-v4-pro
+#                       (e.g. anthropic/claude-opus-4-8 to run aider on Claude)
 #   AIDER_EDITOR_MODEL  editing model, default: deepseek/deepseek-chat
+#                       (e.g. anthropic/claude-sonnet-5)
 #   AIDER_MAP_TOKENS    repo-map budget, default: 4096
-#   DEEPSEEK_API_KEY    consumed by aider and the helper calls below
+#   DEEPSEEK_API_KEY    consumed by aider (when on a deepseek/ model) + the helper
+#                       calls below (scoping/self-review/judge stay on DeepSeek)
+#   ANTHROPIC_API_KEY   consumed by aider when AIDER_MODEL/EDITOR is a claude model
+#                       (optional: unset for DeepSeek-only runs)
 #   GITHUB_BOT_LOGIN    reviewer login to treat as "self" (ignored when waiting)
 #   REVIEW_MAX_ROUNDS   default: 3
 #   REVIEW_TIMEOUT      seconds to wait per review round (default: 1800)
@@ -520,27 +525,34 @@ SCOPE_TEST_RUNNER=""
 [ -n "$SCOPE_TEST_CMD" ] && SCOPE_TEST_RUNNER=$(bounded_runner "$SCOPE_TEST_CMD" "$TEST_TIMEOUT")
 
 # --- aider ---------------------------------------------------------------------
-# Per-model overrides: temperature + frequency penalty keep DeepSeek out of
-# repetition loops; max_tokens bounds a single response. Entries fully specify
-# the DeepSeek-appropriate settings since a file entry replaces the built-in one.
-cat > /work/aider-model-settings.yml <<EOF
-- name: ${AIDER_MODEL}
-  edit_format: diff
-  use_repo_map: true
-  examples_as_sys_msg: true
-  extra_params:
-    max_tokens: 8192
-    temperature: ${AIDER_TEMPERATURE}
-    frequency_penalty: ${AIDER_FREQUENCY_PENALTY}
-- name: ${AIDER_EDITOR_MODEL}
-  edit_format: diff
-  use_repo_map: true
-  examples_as_sys_msg: true
-  extra_params:
-    max_tokens: 8192
-    temperature: ${AIDER_TEMPERATURE}
-    frequency_penalty: ${AIDER_FREQUENCY_PENALTY}
-EOF
+# Per-model overrides. A model-settings entry fully replaces aider's built-in one,
+# so we tune sampling per provider:
+#   * DeepSeek degenerates into verbatim repetition loops at temperature 0, so it
+#     needs a little temperature + a frequency penalty (its raison d'etre here).
+#   * Anthropic (Claude) models REJECT those knobs — Opus 4.8 / Sonnet 5 return
+#     HTTP 400 on temperature/top_p and don't support frequency_penalty at all —
+#     so we disable temperature entirely (use_temperature:false) and send neither
+#     penalty. A stray temperature would 400 every request and fail the whole run.
+# Detection is by model name (the `anthropic/` LiteLLM prefix or a `claude` id),
+# applied independently to the architect and editor models so a mixed pairing
+# (e.g. Claude architect + DeepSeek editor) still gets each half's right settings.
+model_settings_entry() {
+  local m="$1"
+  printf -- '- name: %s\n' "$m"
+  printf -- '  edit_format: diff\n  use_repo_map: true\n  examples_as_sys_msg: true\n'
+  case "$m" in
+    anthropic/*|*claude*)
+      printf -- '  use_temperature: false\n'
+      printf -- '  extra_params:\n    max_tokens: 16384\n' ;;
+    *)
+      printf -- '  extra_params:\n    max_tokens: 8192\n    temperature: %s\n    frequency_penalty: %s\n' \
+        "$AIDER_TEMPERATURE" "$AIDER_FREQUENCY_PENALTY" ;;
+  esac
+}
+{
+  model_settings_entry "$AIDER_MODEL"
+  model_settings_entry "$AIDER_EDITOR_MODEL"
+} > /work/aider-model-settings.yml
 
 # Architect mode + explicit files + a real test loop. AIDER_RESTORE keeps the
 # conversation across rounds so fixes build on prior context instead of starting

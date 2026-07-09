@@ -79,6 +79,19 @@ func TestBuildJob(t *testing.T) {
 	if secretKeys["GITHUB_TOKEN"] != "WORKER_GITHUB_TOKEN" {
 		t.Errorf("GITHUB_TOKEN should map to WORKER_GITHUB_TOKEN secret key, got %+v", secretKeys)
 	}
+	if secretKeys["ANTHROPIC_API_KEY"] != "ANTHROPIC_API_KEY" {
+		t.Errorf("ANTHROPIC_API_KEY should come from secret, got %+v", secretKeys)
+	}
+	// ANTHROPIC_API_KEY must be optional so a DeepSeek-only secret still starts.
+	for _, e := range pod.Containers[0].Env {
+		if e.Name != "ANTHROPIC_API_KEY" {
+			continue
+		}
+		ref := e.ValueFrom.SecretKeyRef
+		if ref.Optional == nil || !*ref.Optional {
+			t.Errorf("ANTHROPIC_API_KEY secret ref must be optional")
+		}
+	}
 }
 
 func TestBuildJobPullPolicy(t *testing.T) {

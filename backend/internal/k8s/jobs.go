@@ -134,6 +134,16 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 			},
 		}
 	}
+	// optionalSecretRef tolerates the key being absent from the secret: the env
+	// var is simply left unset instead of blocking the pod with a
+	// CreateContainerConfigError. Used for ANTHROPIC_API_KEY so DeepSeek-only
+	// deployments (whose secret has no Anthropic key) still start.
+	optionalSecretRef := func(key string) *corev1.EnvVarSource {
+		optional := true
+		src := secretRef(key)
+		src.SecretKeyRef.Optional = &optional
+		return src
+	}
 
 	env := []corev1.EnvVar{
 		{Name: "AGENT_REPO", Value: spec.Repo},
@@ -152,6 +162,9 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		{Name: "AIDER_TIMEOUT", Value: fmt.Sprintf("%d", opts.AiderTimeoutSec)},
 		{Name: "DEEPSEEK_API_KEY", ValueFrom: secretRef("DEEPSEEK_API_KEY")},
 		{Name: "GITHUB_TOKEN", ValueFrom: secretRef("WORKER_GITHUB_TOKEN")},
+		// Only consumed by aider when the model is a claude/ model; optional so a
+		// DeepSeek-only secret doesn't break pod startup (see optionalSecretRef).
+		{Name: "ANTHROPIC_API_KEY", ValueFrom: optionalSecretRef("ANTHROPIC_API_KEY")},
 	}
 
 	nonRoot := true
