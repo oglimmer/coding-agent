@@ -14,9 +14,11 @@
 default_install_hook_types: [pre-commit, pre-push]
 
 # Generated/tool-managed and binary files that text-munging hooks must not touch.
+# .cpt are ccrypt-encrypted binaries — end-of-file-fixer et al. would corrupt them.
 exclude: |
   (?x)^(
     .*\.(png|jpe?g|gif|ico|woff2?|ttf|eot)$|
+    .*\.cpt$|
     frontend/package-lock\.json$|
     backend/go\.sum$
   )$
