@@ -30,7 +30,8 @@
 #   REVIEW_POLL         seconds between polls (default: 20)
 #   NO_CHECK_GRACE      polls before trusting a "no checks" reading (default: 3)
 #   DEEPSEEK_BASE_URL   helper-call API base (default: https://api.deepseek.com)
-#   REVIEW_JUDGE_MODEL  model for scoping/self-review/review-judging (default: deepseek-chat)
+#   SCOPE_MODEL         model for task scoping (file selection) (default: deepseek-chat)
+#   REVIEW_JUDGE_MODEL  model for self-review + review-judging (default: deepseek-chat)
 #   SELF_REVIEW_ROUNDS  pre-PR corrective rounds, default: 2
 #   AIDER_TIMEOUT       seconds per aider round before it is killed (default: 3600)
 #   AIDER_TEMPERATURE   sampling temperature (default: 0.2 — DeepSeek loops at 0)
@@ -57,6 +58,11 @@ NO_CHECK_GRACE="${NO_CHECK_GRACE:-3}"
 # DeepSeek credentials as the coding model.
 DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
 REVIEW_JUDGE_MODEL="${REVIEW_JUDGE_MODEL:-deepseek-chat}"
+# Scoping is file-path retrieval over a flat listing, not reasoning — the cheap
+# chat tier is enough, and scoping fails OPEN so a miss just costs a curated file
+# set. Split from REVIEW_JUDGE_MODEL so the diff-quality judge (self-review +
+# review-judge, a genuine reasoning task) can be tuned up independently.
+SCOPE_MODEL="${SCOPE_MODEL:-deepseek-chat}"
 SELF_REVIEW_ROUNDS="${SELF_REVIEW_ROUNDS:-2}"
 # Hard per-round bound: a model stuck in a repetition loop must not ride out the
 # whole Job deadline.
@@ -131,12 +137,13 @@ gh_api() {
   done
 }
 
-# deepseek_call SYSTEM USER — one-shot chat completion against the helper model;
-# echoes the assistant content, empty output on any failure (callers fail open
-# or fail safe as appropriate to their gate).
+# deepseek_call SYSTEM USER [MODEL] — one-shot chat completion against a helper
+# model; echoes the assistant content, empty output on any failure (callers fail
+# open or fail safe as appropriate to their gate). MODEL defaults to
+# REVIEW_JUDGE_MODEL (the judging tier); scoping passes SCOPE_MODEL to override it.
 deepseek_call() {
-  local sys="$1" user="$2" payload resp
-  payload=$(jq -cn --arg m "$REVIEW_JUDGE_MODEL" --arg s "$sys" --arg u "$user" \
+  local sys="$1" user="$2" model="${3:-$REVIEW_JUDGE_MODEL}" payload resp
+  payload=$(jq -cn --arg m "$model" --arg s "$sys" --arg u "$user" \
     '{model:$m, temperature:0, messages:[{role:"system",content:$s},{role:"user",content:$u}]}') || return 1
   resp=$(curl -sS --max-time 120 -X POST "${DEEPSEEK_BASE_URL}/chat/completions" \
     -H "Authorization: Bearer ${DEEPSEEK_API_KEY:-}" \
@@ -163,6 +170,7 @@ echo "worker_version: ${WORKER_VERSION:-dev}"
 echo "worker_built:   ${WORKER_BUILD_TIME:-unknown}"
 echo "repo:           ${AGENT_REPO}  base=${BASE_BRANCH}"
 echo "model:          ${AIDER_MODEL}  editor=${AIDER_EDITOR_MODEL}"
+echo "helper_models:  scope=${SCOPE_MODEL}  judge=${REVIEW_JUDGE_MODEL}"
 echo "review_rounds:  ${REVIEW_MAX_ROUNDS}  verify_rounds=${VERIFY_MAX_ROUNDS}  aider_timeout=${AIDER_TIMEOUT}s"
 echo "verify_cmd:     ${VERIFY_CMD:-<detected>}"
 echo "test_cmd:       ${TEST_CMD:-<detected>}"
@@ -299,7 +307,7 @@ scope_repo() {
   sys='You prepare a coding task for an automated coding agent. Given a feature request and the repository file listing, reply with ONLY a compact JSON object: {"files":["path",...],"notes":"..."}. "files": 5-15 EXISTING paths from the listing that are most relevant — the files that must change, plus key context (routing, templates, similar features, the tests to mirror). "notes": 2-4 sentences on WHERE the feature belongs and how to implement it idiomatically in this codebase.'
   user=$(printf 'FEATURE REQUEST:\n%s\n\nREPOSITORY FILE LISTING:\n%s\n' \
     "${AGENT_FEATURE:-$AGENT_PROMPT}" "$listing")
-  content=$(deepseek_call "$sys" "$user") || return 0
+  content=$(deepseek_call "$sys" "$user" "$SCOPE_MODEL") || return 0
   json=$(printf '%s' "$content" | extract_json) || return 0
   [ -n "$json" ] || return 0
 
@@ -310,7 +318,7 @@ scope_repo() {
   SCOPE_NOTES=$(echo "$json" | jq -r '.notes // ""' 2>/dev/null)
 }
 
-echo "=== scoping the task (${REVIEW_JUDGE_MODEL}) ==="
+echo "=== scoping the task (${SCOPE_MODEL}) ==="
 scope_repo
 echo "=== scope: ${#SCOPE_FILES[@]} files ==="
 [ -n "$SCOPE_NOTES" ] && echo "=== scope notes: ${SCOPE_NOTES} ==="
