@@ -167,24 +167,26 @@ function requestFeature(repo: Repo) {
         <p class="reqs-title">Before adding a repo, make sure it's set up for the agent:</p>
         <ul>
           <li>
-            The worker's GitHub token has <strong>Contents</strong> and
-            <strong>Pull requests</strong> write access — plus <strong>Workflows</strong>
-            write if the agent may change files under <code>.github/workflows/</code>.
+            Worker token has <strong>Contents</strong> + <strong>Pull requests</strong> write
+            (add <strong>Workflows</strong> write if the agent edits <code>.github/workflows/</code>).
           </li>
           <li>
-            The base branch exists and does <strong>not</strong> require a human approving
-            review — the agent merges through the API, and the AI reviewer only comments.
+            Base branch exists and needs no <strong>human approving review</strong> — the agent
+            merges via the API; the AI reviewer only comments.
           </li>
-          <li><strong>Squash merging is enabled</strong> in the repository settings.</li>
-          <li>
-            Set the <strong>verify command</strong> above to the same build/lint/test
-            command your CI runs — the agent runs it (and any <code>.pre-commit-config.yaml</code>
-            hooks) locally and fixes failures before opening a PR, so a red CI check
-            never wastes a review round.
-          </li>
+          <li><strong>Squash merging</strong> is enabled in the repo settings.</li>
           <li>
             The AI review workflow (<code>oglimmer/review-action</code>) is installed with an
             <code>OPENAI_API_KEY</code> secret — jobs wait for its review and time out without it.
+          </li>
+          <li>
+            <strong>Verify command</strong> (above): your CI's build/lint/test command — the agent
+            runs it plus any <code>.pre-commit-config.yaml</code> hooks locally and fixes failures
+            before the PR opens.
+          </li>
+          <li>
+            <strong>Test command</strong> (above): optional fast per-edit check; auto-detected from
+            the repo's manifests if left empty.
           </li>
         </ul>
       </div>
