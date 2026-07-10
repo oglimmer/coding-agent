@@ -7,7 +7,7 @@
 FROM python:3.12-slim
 
 ARG TARGETARCH
-ARG GO_VERSION=1.26.0
+ARG GO_VERSION=1.26.4
 
 # git: clone/push; curl+jq: GitHub REST API and log-marker JSON.
 # nodejs (NodeSource LTS): run JS/TS repo test suites (npm ci && npm test).
@@ -48,6 +48,11 @@ WORKDIR /work
 ENV HOME=/work
 ENV GOPATH=/work/go
 ENV GOCACHE=/work/.cache/go-build
+# Use only the toolchain baked into this image. Never fetch a go toolchain at
+# runtime: a cold `go test` in a fresh /work would otherwise spend most of the
+# bounded baseline window downloading it, silently killing the auto-test loop.
+# If a repo pins a newer Go than this image, fail fast (bump GO_VERSION instead).
+ENV GOTOOLCHAIN=local
 
 # Build provenance, baked in last so it never busts the toolchain layer cache.
 # oglimmer.sh already passes these --build-arg values to every image.
