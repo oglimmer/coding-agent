@@ -1,5 +1,5 @@
 // Hand-rolled fetch wrapper. Backend errors are JSON `{ "error": "..." }`.
-import type { AuthConfig, Job, Repo, Role, User } from './types'
+import type { AuthConfig, Engine, Job, Repo, Role, User } from './types'
 
 const TOKEN_KEY = 'token'
 
@@ -96,7 +96,8 @@ export const api = {
   getJob: (id: string) => request<Job>('GET', `/jobs/${id}`),
   getJobLogs: (id: string) =>
     request<{ logs: string; unavailable?: boolean }>('GET', `/jobs/${id}/logs`),
-  createJob: (repoId: string, feature: string) => request<Job>('POST', '/jobs', { repoId, feature }),
+  createJob: (repoId: string, feature: string, engine: Engine) =>
+    request<Job>('POST', '/jobs', { repoId, feature, engine }),
   deleteJob: (id: string) => request<void>('DELETE', `/jobs/${id}`),
 
   listUsers: () => request<User[]>('GET', '/admin/users'),

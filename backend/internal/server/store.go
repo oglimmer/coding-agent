@@ -78,6 +78,7 @@ type Job struct {
 	UserName   string `json:"userName"`
 	Feature    string `json:"feature"`
 	Status     string `json:"status"`
+	Engine     string `json:"engine"` // "aider" | "claude-code"
 	K8sJobName string `json:"-"`
 	Branch     string `json:"branch,omitempty"`
 	PRURL      string `json:"prUrl,omitempty"`
@@ -283,7 +284,7 @@ func (s *Store) DeleteRepo(ctx context.Context, id string) error {
 
 const jobSelect = `
 	SELECT j.id, j.repo_id, r.owner || '/' || r.name, j.user_id, u.name,
-	       j.feature, j.status, j.k8s_job_name, j.branch, j.pr_url, j.reason,
+	       j.feature, j.status, j.engine, j.k8s_job_name, j.branch, j.pr_url, j.reason,
 	       j.metadata, j.created_at, j.updated_at
 	FROM jobs j
 	JOIN repos r ON r.id = j.repo_id
@@ -293,7 +294,7 @@ func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 	var j Job
 	var meta []byte
 	err := row.Scan(&j.ID, &j.RepoID, &j.RepoName, &j.UserID, &j.UserName,
-		&j.Feature, &j.Status, &j.K8sJobName, &j.Branch, &j.PRURL, &j.Reason,
+		&j.Feature, &j.Status, &j.Engine, &j.K8sJobName, &j.Branch, &j.PRURL, &j.Reason,
 		&meta, &j.CreatedAt, &j.UpdatedAt)
 	if len(meta) > 0 && string(meta) != "{}" {
 		j.Metadata = json.RawMessage(meta)
@@ -302,11 +303,11 @@ func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 }
 
 // CreateJob inserts a new job row in the given initial status.
-func (s *Store) CreateJob(ctx context.Context, repoID, userID, feature, status string) (Job, error) {
+func (s *Store) CreateJob(ctx context.Context, repoID, userID, feature, status, engine string) (Job, error) {
 	var id string
 	err := s.DB.QueryRowContext(ctx, `
-		INSERT INTO jobs (repo_id, user_id, feature, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`, repoID, userID, feature, status).Scan(&id)
+		INSERT INTO jobs (repo_id, user_id, feature, status, engine)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`, repoID, userID, feature, status, engine).Scan(&id)
 	if err != nil {
 		return Job{}, err
 	}

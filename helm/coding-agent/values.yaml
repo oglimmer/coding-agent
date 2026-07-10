@@ -55,6 +55,16 @@ worker:
   # deepseek/deepseek-v4-pro + deepseek/deepseek-chat to go back to DeepSeek.
   model: "anthropic/claude-opus-4-8"
   editorModel: "anthropic/claude-sonnet-5"
+  # Alternative "claude-code" engine: a separate image running Anthropic's Claude
+  # Code CLI against a DeepSeek backend (no ANTHROPIC_API_KEY needed — it
+  # authenticates with DEEPSEEK_API_KEY). Chosen per-job in the request form.
+  claudeImage: "ghcr.io/oglimmer/coding-agent-worker-claude:latest"
+  # Claude Code primary model (a DeepSeek model id). deepseek-v4-flash is used for
+  # its subagent/haiku tier automatically inside the worker.
+  claudeModel: "deepseek-v4-pro"
+  # Seconds a single Claude Code round may run before it is killed. Like
+  # aiderTimeout, keep jobTimeout well above this (a job runs several rounds).
+  claudeTimeout: 3600
   # Reviewer login the worker treats as "self" when waiting for the PR review.
   githubBotLogin: "coding-agent-bot"
   reviewMaxRounds: 3

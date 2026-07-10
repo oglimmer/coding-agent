@@ -55,6 +55,9 @@ type Config struct {
 	WorkerImagePullPolicy string
 	WorkerModel           string
 	WorkerEditorModel     string
+	WorkerClaudeImage     string // image for the claude-code engine worker
+	WorkerClaudeModel     string // Claude Code primary model (a DeepSeek model id)
+	ClaudeTimeoutSec      int    // seconds per Claude Code round before it is killed
 	WorkerNamespace       string
 	WorkerSecretName      string
 	WorkerImagePullSecret string
@@ -98,6 +101,9 @@ func Load() Config {
 		WorkerImagePullPolicy: getenv("WORKER_IMAGE_PULL_POLICY", "Always"),
 		WorkerModel:           getenv("WORKER_MODEL", "deepseek/deepseek-v4-pro"),
 		WorkerEditorModel:     getenv("WORKER_EDITOR_MODEL", "deepseek/deepseek-chat"),
+		WorkerClaudeImage:     getenv("WORKER_CLAUDE_IMAGE", "ghcr.io/oglimmer/coding-agent-worker-claude:latest"),
+		WorkerClaudeModel:     getenv("WORKER_CLAUDE_MODEL", "deepseek-v4-pro"),
+		ClaudeTimeoutSec:      parseInt("CLAUDE_TIMEOUT", 3600),
 		WorkerNamespace:       os.Getenv("WORKER_NAMESPACE"),
 		WorkerSecretName:      getenv("WORKER_SECRET_NAME", "coding-agent-secret"),
 		WorkerImagePullSecret: os.Getenv("WORKER_IMAGE_PULL_SECRET"),

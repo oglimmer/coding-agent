@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./oglimmer.sh test                 run backend + frontend test suites
-#   ./oglimmer.sh build [-b|-f|-w|-a]  build docker images (backend/frontend/worker/all)
+#   ./oglimmer.sh build [-b|-f|-w|-c|-a]  build docker images (backend/frontend/worker/worker-claude/all)
 #   ./oglimmer.sh start | stop | logs  local compose stack (postgres + backend)
 #   ./oglimmer.sh dev                  hints for running the dev servers
 #
@@ -45,6 +45,7 @@ cmd_test() {
   log "worker: shellcheck"
   command -v shellcheck >/dev/null 2>&1 || die "shellcheck not installed (brew install shellcheck)"
   shellcheck "$ROOT/worker/run_agent.sh"
+  shellcheck "$ROOT/worker-claude/run_agent.sh"
 
   log "frontend: install deps"
   ( cd "$ROOT/frontend" && npm ci )
@@ -117,6 +118,7 @@ cmd_build() {
       -b) what="backend" ;;
       -f) what="frontend" ;;
       -w) what="worker" ;;
+      -c) what="worker-claude" ;;
       -a) what="all" ;;
       --platform) PLATFORM="$2"; shift ;;
       --no-push) PUSH=false ;;
@@ -129,10 +131,12 @@ cmd_build() {
     backend)  build_image backend  "$ROOT/backend"  ${args[@]+"${args[@]}"} ;;
     frontend) build_image frontend "$ROOT/frontend" ${args[@]+"${args[@]}"} ;;
     worker)   build_image worker   "$ROOT/worker"   ${args[@]+"${args[@]}"} ;;
+    worker-claude) build_image worker-claude "$ROOT/worker-claude" ${args[@]+"${args[@]}"} ;;
     all)
       build_image backend  "$ROOT/backend"
       build_image frontend "$ROOT/frontend"
       build_image worker   "$ROOT/worker"
+      build_image worker-claude "$ROOT/worker-claude"
       ;;
   esac
 }

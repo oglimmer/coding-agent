@@ -3,7 +3,7 @@ import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, errMsg } from '@/api'
 import { useAsyncData } from '@/composables/useAsyncData'
-import type { Job, Repo } from '@/types'
+import type { Engine, Job, Repo } from '@/types'
 
 const props = defineProps<{ repoId?: string }>()
 const router = useRouter()
@@ -11,6 +11,14 @@ const router = useRouter()
 const { data: repos, loading, error } = useAsyncData<Repo[]>(() => api.listRepos(), [])
 const selectedRepo = ref(props.repoId ?? '')
 const feature = ref('')
+
+// Which worker implements the request. Both are DeepSeek-backed; they differ in
+// the coding engine driving the change.
+const ENGINES: { value: Engine; label: string; hint: string }[] = [
+  { value: 'aider', label: 'aider', hint: 'aider in architect mode on DeepSeek (default)' },
+  { value: 'claude-code', label: 'Claude Code', hint: 'Claude Code CLI on a DeepSeek backend' },
+]
+const engine = ref<Engine>('aider')
 const submitting = ref(false)
 const formError = ref<string | null>(null)
 const rejected = ref<Job | null>(null)
@@ -30,7 +38,7 @@ async function submit() {
   }
   submitting.value = true
   try {
-    const job = await api.createJob(selectedRepo.value, feature.value.trim())
+    const job = await api.createJob(selectedRepo.value, feature.value.trim(), engine.value)
     if (job.status === 'rejected') {
       rejected.value = job
       return
@@ -61,6 +69,15 @@ async function submit() {
       <select id="repo" v-model="selectedRepo" class="select">
         <option v-for="r in repos" :key="r.id" :value="r.id">{{ r.owner }}/{{ r.name }}</option>
       </select>
+
+      <label class="label" style="margin-top: 1rem">Coding engine</label>
+      <div class="engines">
+        <label v-for="e in ENGINES" :key="e.value" class="engine" :class="{ active: engine === e.value }">
+          <input v-model="engine" type="radio" name="engine" :value="e.value">
+          <span class="engine-name">{{ e.label }}</span>
+          <span class="engine-hint muted">{{ e.hint }}</span>
+        </label>
+      </div>
 
       <label class="label" for="feat" style="margin-top: 1rem">Feature description</label>
       <textarea
@@ -98,6 +115,40 @@ async function submit() {
 }
 .submit {
   margin-top: 1.25rem;
+}
+.engines {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+.engine {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.engine.active {
+  border-color: var(--accent, #3b82f6);
+  box-shadow: 0 0 0 1px var(--accent, #3b82f6) inset;
+}
+.engine input {
+  position: absolute;
+  opacity: 0;
+}
+.engine-name {
+  font-weight: 600;
+}
+.engine-hint {
+  font-size: 0.78rem;
+}
+@media (max-width: 520px) {
+  .engines {
+    grid-template-columns: 1fr;
+  }
 }
 .reject {
   margin-top: 1rem;

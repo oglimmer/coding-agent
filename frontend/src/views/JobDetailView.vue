@@ -26,11 +26,12 @@ const metaRows = computed(() => {
     if (value !== undefined && value !== null && value !== '') rows.push({ label, value: String(value) })
   }
   push('Platform', [m.platformVersion, m.platformCommit].filter(Boolean).join(' @ '))
+  push('Engine', m.engine)
   push('Worker image', m.workerImage)
   push('Model', m.model)
   push('Editor model', m.editorModel)
   push('Review rounds', m.reviewMaxRounds)
-  push('Aider timeout', m.aiderTimeoutSec ? `${m.aiderTimeoutSec}s` : undefined)
+  push('Agent timeout', m.aiderTimeoutSec ? `${m.aiderTimeoutSec}s` : undefined)
   push('Base branch', m.baseBranch)
   push('Verify command', m.verifyCommand)
   push('Test command', m.testCommand)
@@ -83,7 +84,7 @@ async function retry() {
   busy.value = true
   actionError.value = null
   try {
-    const fresh = await api.createJob(job.value.repoId, job.value.feature)
+    const fresh = await api.createJob(job.value.repoId, job.value.feature, job.value.engine)
     await router.push(`/jobs/${fresh.id}`)
   } catch (e) {
     actionError.value = errMsg(e)

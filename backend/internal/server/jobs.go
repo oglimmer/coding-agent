@@ -61,19 +61,41 @@ func buildPrompt(repoFullName, username, feature string) string {
 
 // jobMetadata captures the platform version and effective worker config a job
 // runs under. Stored as JSON on the job so a run can be analysed after the fact.
-func (a *App) jobMetadata(repo Repo) map[string]any {
-	return map[string]any{
+// The model/image fields reflect the engine the job actually runs on.
+func (a *App) jobMetadata(repo Repo, engine string) map[string]any {
+	m := map[string]any{
 		"platformCommit":  buildinfo.Commit,
 		"platformVersion": buildinfo.Version,
-		"workerImage":     a.Cfg.WorkerImage,
-		"model":           a.Cfg.WorkerModel,
-		"editorModel":     a.Cfg.WorkerEditorModel,
+		"engine":          engine,
 		"reviewMaxRounds": a.Cfg.ReviewMaxRounds,
-		"aiderTimeoutSec": a.Cfg.AiderTimeoutSec,
 		"deepseekBaseURL": a.Cfg.DeepSeekBaseURL,
 		"baseBranch":      repo.BaseBranch,
 		"verifyCommand":   repo.VerifyCommand,
 		"testCommand":     repo.TestCommand,
+	}
+	if engine == k8s.EngineClaudeCode {
+		m["workerImage"] = a.Cfg.WorkerClaudeImage
+		m["model"] = a.Cfg.WorkerClaudeModel
+		m["aiderTimeoutSec"] = a.Cfg.ClaudeTimeoutSec
+	} else {
+		m["workerImage"] = a.Cfg.WorkerImage
+		m["model"] = a.Cfg.WorkerModel
+		m["editorModel"] = a.Cfg.WorkerEditorModel
+		m["aiderTimeoutSec"] = a.Cfg.AiderTimeoutSec
+	}
+	return m
+}
+
+// normalizeEngine validates the requested engine, defaulting an empty value to
+// aider. It returns the canonical engine string and whether it was valid.
+func normalizeEngine(engine string) (string, bool) {
+	switch engine {
+	case "", k8s.EngineAider:
+		return k8s.EngineAider, true
+	case k8s.EngineClaudeCode:
+		return k8s.EngineClaudeCode, true
+	default:
+		return "", false
 	}
 }
 
@@ -89,6 +111,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RepoID  string `json:"repoId"`
 		Feature string `json:"feature"`
+		Engine  string `json:"engine"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
@@ -97,6 +120,11 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	req.Feature = strings.TrimSpace(req.Feature)
 	if len(req.Feature) < minFeatureLength {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("please describe the feature in at least %d characters", minFeatureLength))
+		return
+	}
+	engine, ok := normalizeEngine(req.Engine)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "unknown engine; choose 'aider' or 'claude-code'")
 		return
 	}
 
@@ -126,7 +154,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist the job in 'checking' so it is visible while the gate runs.
-	job, err := a.Store.CreateJob(r.Context(), repo.ID, u.ID, req.Feature, "checking")
+	job, err := a.Store.CreateJob(r.Context(), repo.ID, u.ID, req.Feature, "checking", engine)
 	if err != nil {
 		a.serverErr(w, r, err, "")
 		return
@@ -134,7 +162,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	// Snapshot the platform version + config this job runs under, for later
 	// analysis (it survives independently of the worker pod and its logs).
-	if raw, mErr := json.Marshal(a.jobMetadata(repo)); mErr == nil {
+	if raw, mErr := json.Marshal(a.jobMetadata(repo, engine)); mErr == nil {
 		if err := a.Store.SetJobMetadata(r.Context(), job.ID, raw); err != nil {
 			log.Printf("WARN jobs: set metadata for %s: %v", job.ID, err)
 		}
@@ -182,6 +210,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Prompt:        buildPrompt(repo.FullName(), u.Name, req.Feature),
 		Feature:       req.Feature,
 		PRTitle:       "feat: " + truncate(req.Feature, 60),
+		Engine:        engine,
 		VerifyCommand: repo.VerifyCommand,
 		TestCommand:   repo.TestCommand,
 	}

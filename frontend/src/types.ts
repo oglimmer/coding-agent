@@ -21,9 +21,14 @@ export interface Repo {
 
 export type JobStatus = 'checking' | 'rejected' | 'running' | 'success' | 'failed'
 
+// Which coding-agent worker implements a request. 'aider' is the default worker
+// (aider + DeepSeek); 'claude-code' runs Claude Code against a DeepSeek backend.
+export type Engine = 'aider' | 'claude-code'
+
 export interface JobMetadata {
   platformCommit?: string
   platformVersion?: string
+  engine?: Engine
   workerImage?: string
   model?: string
   editorModel?: string
@@ -43,6 +48,7 @@ export interface Job {
   userName: string
   feature: string
   status: JobStatus
+  engine: Engine
   branch?: string
   prUrl?: string
   reason?: string

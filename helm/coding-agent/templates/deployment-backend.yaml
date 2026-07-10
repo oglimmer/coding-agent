@@ -73,6 +73,12 @@ spec:
               value: {{ .Values.worker.model | quote }}
             - name: WORKER_EDITOR_MODEL
               value: {{ .Values.worker.editorModel | quote }}
+            - name: WORKER_CLAUDE_IMAGE
+              value: {{ .Values.worker.claudeImage | quote }}
+            - name: WORKER_CLAUDE_MODEL
+              value: {{ .Values.worker.claudeModel | quote }}
+            - name: CLAUDE_TIMEOUT
+              value: {{ .Values.worker.claudeTimeout | quote }}
             - name: WORKER_SECRET_NAME
               value: {{ include "coding-agent.secretName" . | quote }}
             - name: WORKER_SERVICE_ACCOUNT

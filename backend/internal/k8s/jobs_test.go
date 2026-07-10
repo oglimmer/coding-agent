@@ -94,6 +94,55 @@ func TestBuildJob(t *testing.T) {
 	}
 }
 
+func TestBuildJobClaudeEngine(t *testing.T) {
+	spec := JobSpec{
+		JobName: "coding-agent-abc",
+		Repo:    "oglimmer/example",
+		Branch:  "agent/abc-feature",
+		Engine:  EngineClaudeCode,
+	}
+	opts := Options{
+		Image:            "ghcr.io/oglimmer/coding-agent-worker:latest",
+		ClaudeImage:      "ghcr.io/oglimmer/coding-agent-worker-claude:latest",
+		ClaudeModel:      "deepseek-v4-pro",
+		ClaudeTimeoutSec: 3600,
+		Model:            "deepseek/deepseek-v4-pro",
+		SecretName:       "coding-agent-secret",
+	}
+
+	pod := BuildJob(spec, opts).Spec.Template.Spec
+	if pod.Containers[0].Image != opts.ClaudeImage {
+		t.Errorf("claude engine image = %q, want %q", pod.Containers[0].Image, opts.ClaudeImage)
+	}
+
+	env := map[string]string{}
+	secretKeys := map[string]bool{}
+	for _, e := range pod.Containers[0].Env {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			secretKeys[e.Name] = true
+		} else {
+			env[e.Name] = e.Value
+		}
+	}
+	if env["CLAUDE_MODEL"] != "deepseek-v4-pro" {
+		t.Errorf("CLAUDE_MODEL = %q", env["CLAUDE_MODEL"])
+	}
+	if env["CLAUDE_TIMEOUT"] != "3600" {
+		t.Errorf("CLAUDE_TIMEOUT = %q", env["CLAUDE_TIMEOUT"])
+	}
+	// The claude-code engine must not carry aider-only wiring.
+	if _, ok := env["AIDER_MODEL"]; ok {
+		t.Error("claude engine should not set AIDER_MODEL")
+	}
+	if secretKeys["ANTHROPIC_API_KEY"] {
+		t.Error("claude engine authenticates via DEEPSEEK_API_KEY; no ANTHROPIC_API_KEY expected")
+	}
+	// The DeepSeek key + GitHub token are still required.
+	if !secretKeys["DEEPSEEK_API_KEY"] || !secretKeys["GITHUB_TOKEN"] {
+		t.Errorf("claude engine missing required secrets, got %+v", secretKeys)
+	}
+}
+
 func TestBuildJobPullPolicy(t *testing.T) {
 	cases := map[string]string{
 		"":             "Always",

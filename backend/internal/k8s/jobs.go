@@ -27,6 +27,12 @@ const ResultMarker = "CODING_AGENT_RESULT:"
 
 const inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
+// Engine selects which coding-agent worker implements the request.
+const (
+	EngineAider      = "aider"       // aider + DeepSeek (the default worker image)
+	EngineClaudeCode = "claude-code" // Claude Code CLI + DeepSeek backend
+)
+
 // JobSpec is everything the worker needs to run one feature request.
 type JobSpec struct {
 	JobName       string
@@ -36,6 +42,7 @@ type JobSpec struct {
 	Prompt        string
 	Feature       string
 	PRTitle       string
+	Engine        string // "aider" | "claude-code"; empty = aider
 	VerifyCommand string // repo's build/lint/test gate; empty = worker detects one
 	TestCommand   string // repo's fast inner-loop test cmd; empty = worker detects one
 }
@@ -44,8 +51,11 @@ type JobSpec struct {
 type Options struct {
 	Image             string
 	ImagePullPolicy   string // Always | IfNotPresent | Never (default Always)
-	Model             string // architect/planning model
-	EditorModel       string // model that turns the plan into edits
+	Model             string // aider architect/planning model
+	EditorModel       string // aider model that turns the plan into edits
+	ClaudeImage       string // image for the claude-code engine (separate from Image)
+	ClaudeModel       string // Claude Code primary model (a DeepSeek model id)
+	ClaudeTimeoutSec  int    // seconds per Claude Code round before it is killed
 	DeepSeekBaseURL   string // helper-call API base for the worker (scope/self-review/judge)
 	Namespace         string
 	SecretName        string
@@ -145,6 +155,8 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		return src
 	}
 
+	// Env common to both engines: the task, the GitHub/DeepSeek plumbing, and the
+	// engine-agnostic review knobs.
 	env := []corev1.EnvVar{
 		{Name: "AGENT_REPO", Value: spec.Repo},
 		{Name: "AGENT_BASE_BRANCH", Value: spec.BaseBranch},
@@ -154,17 +166,33 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		{Name: "AGENT_PR_TITLE", Value: spec.PRTitle},
 		{Name: "AGENT_VERIFY_CMD", Value: spec.VerifyCommand},
 		{Name: "AGENT_TEST_CMD", Value: spec.TestCommand},
-		{Name: "AIDER_MODEL", Value: opts.Model},
-		{Name: "AIDER_EDITOR_MODEL", Value: opts.EditorModel},
 		{Name: "DEEPSEEK_BASE_URL", Value: opts.DeepSeekBaseURL},
 		{Name: "GITHUB_BOT_LOGIN", Value: opts.GitHubBotLogin},
 		{Name: "REVIEW_MAX_ROUNDS", Value: fmt.Sprintf("%d", opts.ReviewMaxRounds)},
-		{Name: "AIDER_TIMEOUT", Value: fmt.Sprintf("%d", opts.AiderTimeoutSec)},
 		{Name: "DEEPSEEK_API_KEY", ValueFrom: secretRef("DEEPSEEK_API_KEY")},
 		{Name: "GITHUB_TOKEN", ValueFrom: secretRef("WORKER_GITHUB_TOKEN")},
-		// Only consumed by aider when the model is a claude/ model; optional so a
-		// DeepSeek-only secret doesn't break pod startup (see optionalSecretRef).
-		{Name: "ANTHROPIC_API_KEY", ValueFrom: optionalSecretRef("ANTHROPIC_API_KEY")},
+	}
+
+	// Engine-specific: image + coding-model wiring. The claude-code engine
+	// authenticates its DeepSeek backend with the same DEEPSEEK_API_KEY (as
+	// ANTHROPIC_AUTH_TOKEN, wired inside the worker script), so it needs no
+	// Anthropic key at all.
+	image := opts.Image
+	if spec.Engine == EngineClaudeCode {
+		image = opts.ClaudeImage
+		env = append(env,
+			corev1.EnvVar{Name: "CLAUDE_MODEL", Value: opts.ClaudeModel},
+			corev1.EnvVar{Name: "CLAUDE_TIMEOUT", Value: fmt.Sprintf("%d", opts.ClaudeTimeoutSec)},
+		)
+	} else {
+		env = append(env,
+			corev1.EnvVar{Name: "AIDER_MODEL", Value: opts.Model},
+			corev1.EnvVar{Name: "AIDER_EDITOR_MODEL", Value: opts.EditorModel},
+			corev1.EnvVar{Name: "AIDER_TIMEOUT", Value: fmt.Sprintf("%d", opts.AiderTimeoutSec)},
+			// Only consumed by aider when the model is a claude/ model; optional so a
+			// DeepSeek-only secret doesn't break pod startup (see optionalSecretRef).
+			corev1.EnvVar{Name: "ANTHROPIC_API_KEY", ValueFrom: optionalSecretRef("ANTHROPIC_API_KEY")},
+		)
 	}
 
 	nonRoot := true
@@ -179,7 +207,7 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		},
 		Containers: []corev1.Container{{
 			Name:            "worker",
-			Image:           opts.Image,
+			Image:           image,
 			ImagePullPolicy: pullPolicy(opts.ImagePullPolicy),
 			Env:             env,
 			Resources: corev1.ResourceRequirements{
