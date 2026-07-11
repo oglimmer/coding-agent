@@ -40,6 +40,18 @@ export interface JobMetadata {
   testCommand?: string
 }
 
+// Per-engine model catalog returned by GET /api/config, used to render the
+// New Job form's model dropdowns. defaultEditorModel is only present for aider.
+export interface EngineModels {
+  models: string[]
+  defaultModel: string
+  defaultEditorModel?: string
+}
+
+export interface ClientConfig {
+  engines: Record<Engine, EngineModels>
+}
+
 export interface Job {
   id: string
   repoId: string
@@ -49,6 +61,8 @@ export interface Job {
   feature: string
   status: JobStatus
   engine: Engine
+  model?: string
+  editorModel?: string
   branch?: string
   prUrl?: string
   reason?: string

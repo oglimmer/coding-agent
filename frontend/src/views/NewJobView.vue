@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, errMsg } from '@/api'
 import { useAsyncData } from '@/composables/useAsyncData'
-import type { Engine, Job, Repo } from '@/types'
+import type { ClientConfig, Engine, EngineModels, Job, Repo } from '@/types'
 
 const props = defineProps<{ repoId?: string }>()
 const router = useRouter()
 
 const { data: repos, loading, error } = useAsyncData<Repo[]>(() => api.listRepos(), [])
+const { data: config } = useAsyncData<ClientConfig | null>(() => api.clientConfig(), null)
 const selectedRepo = ref(props.repoId ?? '')
 const feature = ref('')
 
@@ -19,9 +20,31 @@ const ENGINES: { value: Engine; label: string; hint: string }[] = [
   { value: 'claude-code', label: 'Claude Code', hint: 'Claude Code CLI on a DeepSeek backend' },
 ]
 const engine = ref<Engine>('aider')
+// Per-job coding model(s). aider exposes an architect + editor split; claude-code
+// drives a single model (editorModel is ignored server-side for it). Both default
+// to the deployment default the backend reports for the selected engine.
+const model = ref('')
+const editorModel = ref('')
 const submitting = ref(false)
 const formError = ref<string | null>(null)
 const rejected = ref<Job | null>(null)
+
+// The model catalog for the currently selected engine (allowlist + defaults).
+const engineModels = computed<EngineModels | null>(() => config.value?.engines[engine.value] ?? null)
+
+// Whenever the engine changes or the catalog loads, snap the model selections to
+// that engine's defaults (its ids differ per engine, so a carried-over value
+// would be invalid).
+watch(
+  [engine, engineModels],
+  () => {
+    const em = engineModels.value
+    if (!em) return
+    model.value = em.defaultModel
+    editorModel.value = em.defaultEditorModel ?? ''
+  },
+  { immediate: true },
+)
 
 watch(repos, (list) => {
   if (!selectedRepo.value && list.length > 0) selectedRepo.value = list[0].id
@@ -38,7 +61,13 @@ async function submit() {
   }
   submitting.value = true
   try {
-    const job = await api.createJob(selectedRepo.value, feature.value.trim(), engine.value)
+    const job = await api.createJob(
+      selectedRepo.value,
+      feature.value.trim(),
+      engine.value,
+      model.value,
+      editorModel.value,
+    )
     if (job.status === 'rejected') {
       rejected.value = job
       return
@@ -78,6 +107,32 @@ async function submit() {
           <span class="engine-hint muted">{{ e.hint }}</span>
         </label>
       </div>
+
+      <template v-if="engineModels">
+        <div class="models">
+          <div class="model-field">
+            <label class="label" for="model">
+              {{ engine === 'aider' ? 'Architect model' : 'Model' }}
+            </label>
+            <select id="model" v-model="model" class="select">
+              <option v-for="m in engineModels.models" :key="m" :value="m">{{ m }}</option>
+            </select>
+          </div>
+          <div v-if="engine === 'aider'" class="model-field">
+            <label class="label" for="editor-model">Editor model</label>
+            <select id="editor-model" v-model="editorModel" class="select">
+              <option v-for="m in engineModels.models" :key="m" :value="m">{{ m }}</option>
+            </select>
+          </div>
+        </div>
+        <p class="model-hint muted">
+          {{
+            engine === 'aider'
+              ? 'The architect model plans the change; the editor model writes the diff.'
+              : 'The model Claude Code drives the change with.'
+          }}
+        </p>
+      </template>
 
       <label class="label" for="feat" style="margin-top: 1rem">Feature description</label>
       <textarea
@@ -145,8 +200,27 @@ async function submit() {
 .engine-hint {
   font-size: 0.78rem;
 }
+.models {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+.model-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.model-field .label {
+  margin: 0;
+}
+.model-hint {
+  font-size: 0.78rem;
+  margin-top: 0.35rem;
+}
 @media (max-width: 520px) {
-  .engines {
+  .engines,
+  .models {
     grid-template-columns: 1fr;
   }
 }

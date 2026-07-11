@@ -1,5 +1,5 @@
 // Hand-rolled fetch wrapper. Backend errors are JSON `{ "error": "..." }`.
-import type { AuthConfig, Engine, Job, Repo, Role, User } from './types'
+import type { AuthConfig, ClientConfig, Engine, Job, Repo, Role, User } from './types'
 
 const TOKEN_KEY = 'token'
 
@@ -84,6 +84,7 @@ export const api = {
   devLogin: (username: string, password: string) =>
     request<{ token: string; user: User }>('POST', '/auth/login', { username, password }, false),
   me: () => request<User>('GET', '/me'),
+  clientConfig: () => request<ClientConfig>('GET', '/config'),
 
   listRepos: () => request<Repo[]>('GET', '/repos'),
   createRepo: (owner: string, name: string, baseBranch: string, verifyCommand: string, testCommand: string) =>
@@ -96,8 +97,8 @@ export const api = {
   getJob: (id: string) => request<Job>('GET', `/jobs/${id}`),
   getJobLogs: (id: string) =>
     request<{ logs: string; unavailable?: boolean }>('GET', `/jobs/${id}/logs`),
-  createJob: (repoId: string, feature: string, engine: Engine) =>
-    request<Job>('POST', '/jobs', { repoId, feature, engine }),
+  createJob: (repoId: string, feature: string, engine: Engine, model: string, editorModel: string) =>
+    request<Job>('POST', '/jobs', { repoId, feature, engine, model, editorModel }),
   deleteJob: (id: string) => request<void>('DELETE', `/jobs/${id}`),
 
   listUsers: () => request<User[]>('GET', '/admin/users'),

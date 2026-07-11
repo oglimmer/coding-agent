@@ -73,6 +73,10 @@ func TestBuildJob(t *testing.T) {
 	if env["AIDER_TIMEOUT"] != "3600" {
 		t.Errorf("AIDER_TIMEOUT = %q", env["AIDER_TIMEOUT"])
 	}
+	// With no per-job model on the spec, the Options default is used.
+	if env["AIDER_MODEL"] != "deepseek/deepseek-v4-pro" {
+		t.Errorf("AIDER_MODEL = %q, want the Options default", env["AIDER_MODEL"])
+	}
 	if secretKeys["DEEPSEEK_API_KEY"] != "DEEPSEEK_API_KEY" {
 		t.Errorf("DEEPSEEK_API_KEY should come from secret, got %+v", secretKeys)
 	}
@@ -117,9 +121,13 @@ func TestBuildJobClaudeEngine(t *testing.T) {
 
 	env := map[string]string{}
 	secretKeys := map[string]bool{}
+	optionalSecret := map[string]bool{}
 	for _, e := range pod.Containers[0].Env {
 		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 			secretKeys[e.Name] = true
+			if opt := e.ValueFrom.SecretKeyRef.Optional; opt != nil && *opt {
+				optionalSecret[e.Name] = true
+			}
 		} else {
 			env[e.Name] = e.Value
 		}
@@ -134,12 +142,63 @@ func TestBuildJobClaudeEngine(t *testing.T) {
 	if _, ok := env["AIDER_MODEL"]; ok {
 		t.Error("claude engine should not set AIDER_MODEL")
 	}
-	if secretKeys["ANTHROPIC_API_KEY"] {
-		t.Error("claude engine authenticates via DEEPSEEK_API_KEY; no ANTHROPIC_API_KEY expected")
+	// The Anthropic key is wired for the switchable backend (a claude-* model
+	// routes to the real Anthropic API), but must be OPTIONAL so a DeepSeek-only
+	// secret still starts the pod for DeepSeek-model jobs.
+	if !secretKeys["ANTHROPIC_API_KEY"] {
+		t.Error("claude engine should wire ANTHROPIC_API_KEY for the switchable backend")
+	}
+	if !optionalSecret["ANTHROPIC_API_KEY"] {
+		t.Error("ANTHROPIC_API_KEY secret ref must be optional for the claude engine")
 	}
 	// The DeepSeek key + GitHub token are still required.
 	if !secretKeys["DEEPSEEK_API_KEY"] || !secretKeys["GITHUB_TOKEN"] {
 		t.Errorf("claude engine missing required secrets, got %+v", secretKeys)
+	}
+}
+
+// A per-job model on the spec overrides the Options default for each engine.
+func TestBuildJobPerJobModel(t *testing.T) {
+	base := Options{
+		Image:       "ghcr.io/oglimmer/coding-agent-worker:latest",
+		ClaudeImage: "ghcr.io/oglimmer/coding-agent-worker-claude:latest",
+		Model:       "deepseek/deepseek-v4-pro",
+		EditorModel: "deepseek/deepseek-chat",
+		ClaudeModel: "deepseek-v4-pro",
+		SecretName:  "coding-agent-secret",
+	}
+
+	envOf := func(spec JobSpec) map[string]string {
+		pod := BuildJob(spec, base).Spec.Template.Spec
+		env := map[string]string{}
+		for _, e := range pod.Containers[0].Env {
+			if e.ValueFrom == nil {
+				env[e.Name] = e.Value
+			}
+		}
+		return env
+	}
+
+	aider := envOf(JobSpec{
+		JobName:     "j",
+		Engine:      EngineAider,
+		Model:       "anthropic/claude-opus-4-8",
+		EditorModel: "anthropic/claude-sonnet-5",
+	})
+	if aider["AIDER_MODEL"] != "anthropic/claude-opus-4-8" {
+		t.Errorf("AIDER_MODEL = %q, want per-job override", aider["AIDER_MODEL"])
+	}
+	if aider["AIDER_EDITOR_MODEL"] != "anthropic/claude-sonnet-5" {
+		t.Errorf("AIDER_EDITOR_MODEL = %q, want per-job override", aider["AIDER_EDITOR_MODEL"])
+	}
+
+	claude := envOf(JobSpec{
+		JobName: "j",
+		Engine:  EngineClaudeCode,
+		Model:   "deepseek-v4-flash",
+	})
+	if claude["CLAUDE_MODEL"] != "deepseek-v4-flash" {
+		t.Errorf("CLAUDE_MODEL = %q, want per-job override", claude["CLAUDE_MODEL"])
 	}
 }
 

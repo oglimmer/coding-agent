@@ -28,9 +28,14 @@
 #   AGENT_VERIFY_CMD    repo's build/lint/test command; run as a hard gate before
 #                       the PR. Empty = rely on Claude Code's own checks + pre-commit.
 #   VERIFY_MAX_ROUNDS   corrective Claude rounds for the verify gate (default: 2)
-#   CLAUDE_MODEL        Claude Code primary model, default: deepseek-v4-pro
-#   CLAUDE_SMALL_MODEL  subagent / haiku-tier model, default: deepseek-v4-flash
+#   CLAUDE_MODEL        Claude Code primary model, default: deepseek-v4-pro. A
+#                       deepseek-* id runs on the DeepSeek backend; a claude-* id
+#                       runs on the real Anthropic API (needs ANTHROPIC_API_KEY).
+#   CLAUDE_SMALL_MODEL  subagent / haiku-tier model; default tracks the backend
+#                       (deepseek-v4-flash on DeepSeek, claude-haiku-4-5 on Anthropic)
+#   ANTHROPIC_API_KEY   required when CLAUDE_MODEL is a claude-* (Anthropic) model
 #   ANTHROPIC_BASE_URL  Claude Code API base; default: ${DEEPSEEK_BASE_URL}/anthropic
+#                       on the DeepSeek backend, Anthropic's own default otherwise
 #   CLAUDE_TIMEOUT      seconds per Claude round before it is killed (default: 3600)
 #   GITHUB_BOT_LOGIN    reviewer login to treat as "self" (ignored when waiting)
 #   REVIEW_MAX_ROUNDS   default: 3
@@ -71,15 +76,33 @@ VERIFY_MAX_ROUNDS="${VERIFY_MAX_ROUNDS:-2}"
 REPO_DIR=/work/repo
 API="https://api.github.com/repos/${AGENT_REPO:-}"
 
-# --- Claude Code / DeepSeek backend --------------------------------------------
-# The DeepSeek integration is pure configuration: point Claude Code at DeepSeek's
-# Anthropic-compatible endpoint and authenticate with the DeepSeek key. The
-# opus/sonnet/haiku aliases Claude Code resolves internally are all mapped onto
-# DeepSeek models so any model the agent reaches for stays on DeepSeek.
+# --- Claude Code backend (switchable per model) --------------------------------
+# Claude Code speaks one Anthropic-compatible API; which provider it talks to is
+# derived from the requested model, so a single worker image serves both:
+#   * a DeepSeek model id (deepseek-*) runs against DeepSeek's Anthropic-compatible
+#     endpoint, authenticated with DEEPSEEK_API_KEY (the original behaviour);
+#   * a Claude model id (claude-* / anthropic/*) runs against the real Anthropic
+#     API, authenticated with ANTHROPIC_API_KEY.
+# Claude Code drives EVERY tier (opus/sonnet/haiku aliases, subagents) on that one
+# backend, so the small/haiku model must come from the same provider as the primary.
 CLAUDE_MODEL="${CLAUDE_MODEL:-deepseek-v4-pro}"
-CLAUDE_SMALL_MODEL="${CLAUDE_SMALL_MODEL:-deepseek-v4-flash}"
-export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-${DEEPSEEK_BASE_URL}/anthropic}"
-export ANTHROPIC_AUTH_TOKEN="${DEEPSEEK_API_KEY:-}"
+case "$CLAUDE_MODEL" in
+  claude*|anthropic/*) CLAUDE_BACKEND="anthropic" ;;
+  *)                   CLAUDE_BACKEND="deepseek" ;;
+esac
+
+if [ "$CLAUDE_BACKEND" = "anthropic" ]; then
+  # Real Anthropic API: standard API-key auth, default base URL. Clear any
+  # DeepSeek-gateway overrides so a stray env var cannot divert the request.
+  CLAUDE_SMALL_MODEL="${CLAUDE_SMALL_MODEL:-claude-haiku-4-5}"
+  unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+  export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+else
+  # DeepSeek's Anthropic-compatible endpoint, authenticated with the DeepSeek key.
+  CLAUDE_SMALL_MODEL="${CLAUDE_SMALL_MODEL:-deepseek-v4-flash}"
+  export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-${DEEPSEEK_BASE_URL}/anthropic}"
+  export ANTHROPIC_AUTH_TOKEN="${DEEPSEEK_API_KEY:-}"
+fi
 export ANTHROPIC_MODEL="$CLAUDE_MODEL"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="$CLAUDE_MODEL"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL"
@@ -168,7 +191,13 @@ extract_json() {
 for var in GITHUB_TOKEN AGENT_REPO AGENT_BRANCH AGENT_PROMPT AGENT_PR_TITLE; do
   [ -n "${!var:-}" ] || fail "missing required env var: $var"
 done
+# DeepSeek is always needed for the helper judge calls (self-review / review-judge
+# stay on DeepSeek regardless of the coding backend). An Anthropic-backed coding
+# model additionally needs its own key.
 [ -n "${DEEPSEEK_API_KEY:-}" ] || fail "missing required env var: DEEPSEEK_API_KEY"
+if [ "$CLAUDE_BACKEND" = "anthropic" ]; then
+  [ -n "${ANTHROPIC_API_KEY:-}" ] || fail "model ${CLAUDE_MODEL} routes to the Anthropic backend but ANTHROPIC_API_KEY is not set"
+fi
 
 # Provenance + effective config, printed into the log so a run can be analysed
 # later (this block is persisted with the log even after the pod is gone).
@@ -179,7 +208,8 @@ echo "worker_built:   ${WORKER_BUILD_TIME:-unknown}"
 echo "engine:         claude-code"
 echo "repo:           ${AGENT_REPO}  base=${BASE_BRANCH}"
 echo "model:          ${CLAUDE_MODEL}  small=${CLAUDE_SMALL_MODEL}"
-echo "claude_base:    ${ANTHROPIC_BASE_URL}"
+echo "backend:        ${CLAUDE_BACKEND}"
+echo "claude_base:    ${ANTHROPIC_BASE_URL:-https://api.anthropic.com (default)}"
 echo "helper_model:   judge=${REVIEW_JUDGE_MODEL}"
 echo "review_rounds:  ${REVIEW_MAX_ROUNDS}  verify_rounds=${VERIFY_MAX_ROUNDS}  claude_timeout=${CLAUDE_TIMEOUT}s"
 echo "verify_cmd:     ${VERIFY_CMD:-<none>}"
@@ -555,7 +585,7 @@ Feature request:
 
 $(printf '%s' "${AGENT_FEATURE:-see commit history}" | head -c 2000)
 
-Implemented by Claude Code (${CLAUDE_MODEL}, DeepSeek backend). This PR will be
+Implemented by Claude Code (${CLAUDE_MODEL}, ${CLAUDE_BACKEND} backend). This PR will be
 reviewed by the repository's GitHub Action; findings are addressed automatically
 before merge."
 

@@ -55,13 +55,28 @@ worker:
   # deepseek/deepseek-v4-pro + deepseek/deepseek-chat to go back to DeepSeek.
   model: "anthropic/claude-opus-4-8"
   editorModel: "anthropic/claude-sonnet-5"
+  # The models a user may pick per-job (architect + editor) in the request form.
+  # `model`/`editorModel` above are folded in automatically if omitted here.
+  aiderModels:
+    - "deepseek/deepseek-v4-pro"
+    - "deepseek/deepseek-chat"
+    - "anthropic/claude-opus-4-8"
+    - "anthropic/claude-sonnet-5"
   # Alternative "claude-code" engine: a separate image running Anthropic's Claude
-  # Code CLI against a DeepSeek backend (no ANTHROPIC_API_KEY needed — it
-  # authenticates with DEEPSEEK_API_KEY). Chosen per-job in the request form.
+  # Code CLI. Its backend is switchable per model — a deepseek-* id runs on
+  # DeepSeek (via DEEPSEEK_API_KEY), a claude-* id on the real Anthropic API (needs
+  # ANTHROPIC_API_KEY in the worker secret). Chosen per-job in the request form.
   claudeImage: "ghcr.io/oglimmer/coding-agent-worker-claude:latest"
-  # Claude Code primary model (a DeepSeek model id). deepseek-v4-flash is used for
-  # its subagent/haiku tier automatically inside the worker.
+  # Default claude-code model. deepseek-v4-flash / claude-haiku-4-5 are used for
+  # the subagent/haiku tier automatically inside the worker (tracking the backend).
   claudeModel: "deepseek-v4-pro"
+  # The models a user may pick per-job for the claude-code engine (bare ids). Mix
+  # deepseek-* and claude-* freely; each job routes to the matching backend.
+  claudeModels:
+    - "deepseek-v4-pro"
+    - "deepseek-v4-flash"
+    - "claude-opus-4-8"
+    - "claude-sonnet-5"
   # Seconds a single Claude Code round may run before it is killed. Like
   # aiderTimeout, keep jobTimeout well above this (a job runs several rounds).
   claudeTimeout: 3600

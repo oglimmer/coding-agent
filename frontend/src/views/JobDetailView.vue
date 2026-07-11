@@ -84,7 +84,13 @@ async function retry() {
   busy.value = true
   actionError.value = null
   try {
-    const fresh = await api.createJob(job.value.repoId, job.value.feature, job.value.engine)
+    const fresh = await api.createJob(
+      job.value.repoId,
+      job.value.feature,
+      job.value.engine,
+      job.value.model ?? '',
+      job.value.editorModel ?? '',
+    )
     await router.push(`/jobs/${fresh.id}`)
   } catch (e) {
     actionError.value = errMsg(e)

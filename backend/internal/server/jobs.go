@@ -61,12 +61,14 @@ func buildPrompt(repoFullName, username, feature string) string {
 
 // jobMetadata captures the platform version and effective worker config a job
 // runs under. Stored as JSON on the job so a run can be analysed after the fact.
-// The model/image fields reflect the engine the job actually runs on.
-func (a *App) jobMetadata(repo Repo, engine string) map[string]any {
+// model/editorModel are the resolved per-job coding models (already defaulted to
+// the engine's deployment default when the request left them empty).
+func (a *App) jobMetadata(repo Repo, engine, model, editorModel string) map[string]any {
 	m := map[string]any{
 		"platformCommit":  buildinfo.Commit,
 		"platformVersion": buildinfo.Version,
 		"engine":          engine,
+		"model":           model,
 		"reviewMaxRounds": a.Cfg.ReviewMaxRounds,
 		"deepseekBaseURL": a.Cfg.DeepSeekBaseURL,
 		"baseBranch":      repo.BaseBranch,
@@ -75,12 +77,10 @@ func (a *App) jobMetadata(repo Repo, engine string) map[string]any {
 	}
 	if engine == k8s.EngineClaudeCode {
 		m["workerImage"] = a.Cfg.WorkerClaudeImage
-		m["model"] = a.Cfg.WorkerClaudeModel
 		m["aiderTimeoutSec"] = a.Cfg.ClaudeTimeoutSec
 	} else {
 		m["workerImage"] = a.Cfg.WorkerImage
-		m["model"] = a.Cfg.WorkerModel
-		m["editorModel"] = a.Cfg.WorkerEditorModel
+		m["editorModel"] = editorModel
 		m["aiderTimeoutSec"] = a.Cfg.AiderTimeoutSec
 	}
 	return m
@@ -99,6 +99,78 @@ func normalizeEngine(engine string) (string, bool) {
 	}
 }
 
+// engineModels returns the allowlist and default coding models for an engine.
+// For claude-code the editor model is unused, so defaultEditor is empty.
+func (a *App) engineModels(engine string) (allowed []string, defaultModel, defaultEditor string) {
+	if engine == k8s.EngineClaudeCode {
+		return a.Cfg.WorkerClaudeModels, a.Cfg.WorkerClaudeModel, ""
+	}
+	return a.Cfg.WorkerAiderModels, a.Cfg.WorkerModel, a.Cfg.WorkerEditorModel
+}
+
+// resolveModels validates the requested per-job models against the engine's
+// allowlist, defaulting empty requests to the deployment default. It returns the
+// resolved (model, editorModel) — editorModel is always "" for claude-code — and
+// an error message suitable for a 400 when a requested model is not allowed.
+func (a *App) resolveModels(engine, reqModel, reqEditor string) (model, editorModel, errMsg string) {
+	allowed, defModel, defEditor := a.engineModels(engine)
+
+	model = strings.TrimSpace(reqModel)
+	if model == "" {
+		model = defModel
+	} else if !contains(allowed, model) {
+		return "", "", fmt.Sprintf("unknown model %q for engine %q", model, engine)
+	}
+
+	// The claude-code engine drives a single model; it has no editor split, so we
+	// ignore any editor model the client sent rather than reject the request.
+	if engine == k8s.EngineClaudeCode {
+		return model, "", ""
+	}
+
+	editorModel = strings.TrimSpace(reqEditor)
+	if editorModel == "" {
+		editorModel = defEditor
+	} else if !contains(allowed, editorModel) {
+		return "", "", fmt.Sprintf("unknown editor model %q for engine %q", editorModel, engine)
+	}
+	return model, editorModel, ""
+}
+
+func contains(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// handleClientConfig serves the per-engine model catalog the New Job form needs
+// to render its model dropdowns: the allowlist a job may choose from and the
+// deployment default for each engine. Read-only; available to any authenticated
+// user.
+func (a *App) handleClientConfig(w http.ResponseWriter, r *http.Request) {
+	type engineModels struct {
+		Models             []string `json:"models"`
+		DefaultModel       string   `json:"defaultModel"`
+		DefaultEditorModel string   `json:"defaultEditorModel,omitempty"`
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"engines": map[string]engineModels{
+			k8s.EngineAider: {
+				Models:             a.Cfg.WorkerAiderModels,
+				DefaultModel:       a.Cfg.WorkerModel,
+				DefaultEditorModel: a.Cfg.WorkerEditorModel,
+			},
+			k8s.EngineClaudeCode: {
+				Models:       a.Cfg.WorkerClaudeModels,
+				DefaultModel: a.Cfg.WorkerClaudeModel,
+			},
+		},
+	})
+}
+
 func randomSuffix() string {
 	b := make([]byte, 2)
 	_, _ = rand.Read(b)
@@ -109,9 +181,11 @@ func randomSuffix() string {
 func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFromContext(r.Context())
 	var req struct {
-		RepoID  string `json:"repoId"`
-		Feature string `json:"feature"`
-		Engine  string `json:"engine"`
+		RepoID      string `json:"repoId"`
+		Feature     string `json:"feature"`
+		Engine      string `json:"engine"`
+		Model       string `json:"model"`
+		EditorModel string `json:"editorModel"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
@@ -125,6 +199,11 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	engine, ok := normalizeEngine(req.Engine)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "unknown engine; choose 'aider' or 'claude-code'")
+		return
+	}
+	model, editorModel, mErr := a.resolveModels(engine, req.Model, req.EditorModel)
+	if mErr != "" {
+		writeErr(w, http.StatusBadRequest, mErr)
 		return
 	}
 
@@ -154,7 +233,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist the job in 'checking' so it is visible while the gate runs.
-	job, err := a.Store.CreateJob(r.Context(), repo.ID, u.ID, req.Feature, "checking", engine)
+	job, err := a.Store.CreateJob(r.Context(), repo.ID, u.ID, req.Feature, "checking", engine, model, editorModel)
 	if err != nil {
 		a.serverErr(w, r, err, "")
 		return
@@ -162,7 +241,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	// Snapshot the platform version + config this job runs under, for later
 	// analysis (it survives independently of the worker pod and its logs).
-	if raw, mErr := json.Marshal(a.jobMetadata(repo, engine)); mErr == nil {
+	if raw, mErr := json.Marshal(a.jobMetadata(repo, engine, model, editorModel)); mErr == nil {
 		if err := a.Store.SetJobMetadata(r.Context(), job.ID, raw); err != nil {
 			log.Printf("WARN jobs: set metadata for %s: %v", job.ID, err)
 		}
@@ -211,6 +290,8 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Feature:       req.Feature,
 		PRTitle:       "feat: " + truncate(req.Feature, 60),
 		Engine:        engine,
+		Model:         model,
+		EditorModel:   editorModel,
 		VerifyCommand: repo.VerifyCommand,
 		TestCommand:   repo.TestCommand,
 	}

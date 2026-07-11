@@ -73,10 +73,18 @@ spec:
               value: {{ .Values.worker.model | quote }}
             - name: WORKER_EDITOR_MODEL
               value: {{ .Values.worker.editorModel | quote }}
+            {{- with .Values.worker.aiderModels }}
+            - name: WORKER_AIDER_MODELS
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: WORKER_CLAUDE_IMAGE
               value: {{ .Values.worker.claudeImage | quote }}
             - name: WORKER_CLAUDE_MODEL
               value: {{ .Values.worker.claudeModel | quote }}
+            {{- with .Values.worker.claudeModels }}
+            - name: WORKER_CLAUDE_MODELS
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: CLAUDE_TIMEOUT
               value: {{ .Values.worker.claudeTimeout | quote }}
             - name: WORKER_SECRET_NAME

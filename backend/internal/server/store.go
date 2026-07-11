@@ -71,18 +71,23 @@ func (r Repo) FullName() string { return r.Owner + "/" + r.Name }
 
 // Job is one feature request and its lifecycle.
 type Job struct {
-	ID         string `json:"id"`
-	RepoID     string `json:"repoId"`
-	RepoName   string `json:"repoName"`
-	UserID     string `json:"userId"`
-	UserName   string `json:"userName"`
-	Feature    string `json:"feature"`
-	Status     string `json:"status"`
-	Engine     string `json:"engine"` // "aider" | "claude-code"
-	K8sJobName string `json:"-"`
-	Branch     string `json:"branch,omitempty"`
-	PRURL      string `json:"prUrl,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	ID       string `json:"id"`
+	RepoID   string `json:"repoId"`
+	RepoName string `json:"repoName"`
+	UserID   string `json:"userId"`
+	UserName string `json:"userName"`
+	Feature  string `json:"feature"`
+	Status   string `json:"status"`
+	Engine   string `json:"engine"` // "aider" | "claude-code"
+	// Model is the coding model the job ran on (aider architect / claude-code
+	// primary); EditorModel is aider's editor model (empty for claude-code).
+	// Empty means the engine's deployment default was used.
+	Model       string `json:"model,omitempty"`
+	EditorModel string `json:"editorModel,omitempty"`
+	K8sJobName  string `json:"-"`
+	Branch      string `json:"branch,omitempty"`
+	PRURL       string `json:"prUrl,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 	// Metadata is the config snapshot captured when the job was created (platform
 	// commit, models, review rounds, verify command, …). Small; kept in list rows.
 	Metadata  json.RawMessage `json:"metadata,omitempty"`
@@ -284,7 +289,7 @@ func (s *Store) DeleteRepo(ctx context.Context, id string) error {
 
 const jobSelect = `
 	SELECT j.id, j.repo_id, r.owner || '/' || r.name, j.user_id, u.name,
-	       j.feature, j.status, j.engine, j.k8s_job_name, j.branch, j.pr_url, j.reason,
+	       j.feature, j.status, j.engine, j.model, j.editor_model, j.k8s_job_name, j.branch, j.pr_url, j.reason,
 	       j.metadata, j.created_at, j.updated_at
 	FROM jobs j
 	JOIN repos r ON r.id = j.repo_id
@@ -293,25 +298,40 @@ const jobSelect = `
 func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 	var j Job
 	var meta []byte
+	var model, editorModel sql.NullString
 	err := row.Scan(&j.ID, &j.RepoID, &j.RepoName, &j.UserID, &j.UserName,
-		&j.Feature, &j.Status, &j.Engine, &j.K8sJobName, &j.Branch, &j.PRURL, &j.Reason,
+		&j.Feature, &j.Status, &j.Engine, &model, &editorModel, &j.K8sJobName, &j.Branch, &j.PRURL, &j.Reason,
 		&meta, &j.CreatedAt, &j.UpdatedAt)
+	j.Model = model.String
+	j.EditorModel = editorModel.String
 	if len(meta) > 0 && string(meta) != "{}" {
 		j.Metadata = json.RawMessage(meta)
 	}
 	return j, err
 }
 
-// CreateJob inserts a new job row in the given initial status.
-func (s *Store) CreateJob(ctx context.Context, repoID, userID, feature, status, engine string) (Job, error) {
+// CreateJob inserts a new job row in the given initial status. model/editorModel
+// record the coding model(s) chosen for the run; an empty string is stored as
+// NULL (the engine's deployment default was used).
+func (s *Store) CreateJob(ctx context.Context, repoID, userID, feature, status, engine, model, editorModel string) (Job, error) {
 	var id string
 	err := s.DB.QueryRowContext(ctx, `
-		INSERT INTO jobs (repo_id, user_id, feature, status, engine)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`, repoID, userID, feature, status, engine).Scan(&id)
+		INSERT INTO jobs (repo_id, user_id, feature, status, engine, model, editor_model)
+		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		repoID, userID, feature, status, engine, nullIfEmpty(model), nullIfEmpty(editorModel)).Scan(&id)
 	if err != nil {
 		return Job{}, err
 	}
 	return s.JobByID(ctx, id)
+}
+
+// nullIfEmpty maps "" to a SQL NULL so optional TEXT columns stay NULL rather
+// than storing an empty string.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // JobByID resolves a job with its repo/user names joined in.

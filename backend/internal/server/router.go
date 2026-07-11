@@ -65,6 +65,7 @@ func NewRouter(a *App) http.Handler {
 			// Read surface — available to every authenticated user, viewers
 			// included.
 			r.Get("/me", a.handleMe)
+			r.Get("/config", a.handleClientConfig)
 			r.Get("/repos", a.handleListRepos)
 			r.Get("/jobs", a.handleListJobs)
 			r.Get("/jobs/{id}", a.handleGetJob)

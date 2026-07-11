@@ -43,6 +43,8 @@ type JobSpec struct {
 	Feature       string
 	PRTitle       string
 	Engine        string // "aider" | "claude-code"; empty = aider
+	Model         string // per-job coding model (aider architect / claude-code primary); empty = Options default
+	EditorModel   string // per-job aider editor model; empty = Options default; unused by claude-code
 	VerifyCommand string // repo's build/lint/test gate; empty = worker detects one
 	TestCommand   string // repo's fast inner-loop test cmd; empty = worker detects one
 }
@@ -100,6 +102,17 @@ func New(opts Options) (*Client, error) {
 		return nil, fmt.Errorf("k8s: build clientset: %w", err)
 	}
 	return &Client{cs: cs, namespace: resolveNamespace(opts.Namespace), opts: opts}, nil
+}
+
+// firstNonEmpty returns the first non-empty argument (the per-job override when
+// set, otherwise the deployment default).
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func pullPolicy(p string) corev1.PullPolicy {
@@ -173,21 +186,24 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		{Name: "GITHUB_TOKEN", ValueFrom: secretRef("WORKER_GITHUB_TOKEN")},
 	}
 
-	// Engine-specific: image + coding-model wiring. The claude-code engine
-	// authenticates its DeepSeek backend with the same DEEPSEEK_API_KEY (as
-	// ANTHROPIC_AUTH_TOKEN, wired inside the worker script), so it needs no
-	// Anthropic key at all.
+	// Engine-specific: image + coding-model wiring. The claude-code worker picks
+	// its backend from the chosen model: a DeepSeek model authenticates via
+	// DEEPSEEK_API_KEY (as ANTHROPIC_AUTH_TOKEN, wired inside the worker script),
+	// while a claude-* model routes to the real Anthropic API and uses
+	// ANTHROPIC_API_KEY. The key is passed optionally so a DeepSeek-only secret
+	// (no Anthropic key) still starts the pod for DeepSeek-model jobs.
 	image := opts.Image
 	if spec.Engine == EngineClaudeCode {
 		image = opts.ClaudeImage
 		env = append(env,
-			corev1.EnvVar{Name: "CLAUDE_MODEL", Value: opts.ClaudeModel},
+			corev1.EnvVar{Name: "CLAUDE_MODEL", Value: firstNonEmpty(spec.Model, opts.ClaudeModel)},
 			corev1.EnvVar{Name: "CLAUDE_TIMEOUT", Value: fmt.Sprintf("%d", opts.ClaudeTimeoutSec)},
+			corev1.EnvVar{Name: "ANTHROPIC_API_KEY", ValueFrom: optionalSecretRef("ANTHROPIC_API_KEY")},
 		)
 	} else {
 		env = append(env,
-			corev1.EnvVar{Name: "AIDER_MODEL", Value: opts.Model},
-			corev1.EnvVar{Name: "AIDER_EDITOR_MODEL", Value: opts.EditorModel},
+			corev1.EnvVar{Name: "AIDER_MODEL", Value: firstNonEmpty(spec.Model, opts.Model)},
+			corev1.EnvVar{Name: "AIDER_EDITOR_MODEL", Value: firstNonEmpty(spec.EditorModel, opts.EditorModel)},
 			corev1.EnvVar{Name: "AIDER_TIMEOUT", Value: fmt.Sprintf("%d", opts.AiderTimeoutSec)},
 			// Only consumed by aider when the model is a claude/ model; optional so a
 			// DeepSeek-only secret doesn't break pod startup (see optionalSecretRef).

@@ -53,11 +53,13 @@ type Config struct {
 	// k8s worker jobs
 	WorkerImage           string
 	WorkerImagePullPolicy string
-	WorkerModel           string
-	WorkerEditorModel     string
-	WorkerClaudeImage     string // image for the claude-code engine worker
-	WorkerClaudeModel     string // Claude Code primary model (a DeepSeek model id)
-	ClaudeTimeoutSec      int    // seconds per Claude Code round before it is killed
+	WorkerModel           string   // aider architect model — the per-job default
+	WorkerEditorModel     string   // aider editor model — the per-job default
+	WorkerAiderModels     []string // allowlist a job may pick its aider architect/editor model from
+	WorkerClaudeImage     string   // image for the claude-code engine worker
+	WorkerClaudeModel     string   // Claude Code primary model (a DeepSeek model id) — the per-job default
+	WorkerClaudeModels    []string // allowlist a job may pick its claude-code model from
+	ClaudeTimeoutSec      int      // seconds per Claude Code round before it is killed
 	WorkerNamespace       string
 	WorkerSecretName      string
 	WorkerImagePullSecret string
@@ -101,8 +103,10 @@ func Load() Config {
 		WorkerImagePullPolicy: getenv("WORKER_IMAGE_PULL_POLICY", "Always"),
 		WorkerModel:           getenv("WORKER_MODEL", "deepseek/deepseek-v4-pro"),
 		WorkerEditorModel:     getenv("WORKER_EDITOR_MODEL", "deepseek/deepseek-chat"),
+		WorkerAiderModels:     splitList(getenv("WORKER_AIDER_MODELS", "deepseek/deepseek-v4-pro,deepseek/deepseek-chat,anthropic/claude-opus-4-8,anthropic/claude-sonnet-5")),
 		WorkerClaudeImage:     getenv("WORKER_CLAUDE_IMAGE", "ghcr.io/oglimmer/coding-agent-worker-claude:latest"),
 		WorkerClaudeModel:     getenv("WORKER_CLAUDE_MODEL", "deepseek-v4-pro"),
+		WorkerClaudeModels:    splitList(getenv("WORKER_CLAUDE_MODELS", "deepseek-v4-pro,deepseek-v4-flash,claude-opus-4-8,claude-sonnet-5")),
 		ClaudeTimeoutSec:      parseInt("CLAUDE_TIMEOUT", 3600),
 		WorkerNamespace:       os.Getenv("WORKER_NAMESPACE"),
 		WorkerSecretName:      getenv("WORKER_SECRET_NAME", "coding-agent-secret"),
@@ -146,6 +150,32 @@ func (c *Config) validate() {
 	if !c.DeepSeekEnabled() {
 		log.Printf("WARN config: DEEPSEEK_API_KEY not set; harmful-content gate will fail closed (reject all jobs)")
 	}
+	// The per-engine default model must itself be a selectable option, or a job
+	// that keeps the default would be rejected by its own allowlist. Fold any
+	// missing default into the list rather than fail the boot.
+	c.WorkerAiderModels = ensureListContains(c.WorkerAiderModels, c.WorkerModel, c.WorkerEditorModel)
+	c.WorkerClaudeModels = ensureListContains(c.WorkerClaudeModels, c.WorkerClaudeModel)
+}
+
+// ensureListContains appends each non-empty value not already present, so a
+// configured default is always a member of its allowlist (order preserved).
+func ensureListContains(list []string, values ...string) []string {
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		found := false
+		for _, existing := range list {
+			if existing == v {
+				found = true
+				break
+			}
+		}
+		if !found {
+			list = append(list, v)
+		}
+	}
+	return list
 }
 
 // --- typed env helpers -------------------------------------------------------

@@ -3,7 +3,76 @@ package server
 import (
 	"strings"
 	"testing"
+
+	"github.com/oglimmer/coding-agent/backend/internal/config"
+	"github.com/oglimmer/coding-agent/backend/internal/k8s"
 )
+
+func modelApp() *App {
+	return &App{Cfg: config.Config{
+		WorkerModel:        "deepseek/deepseek-v4-pro",
+		WorkerEditorModel:  "deepseek/deepseek-chat",
+		WorkerAiderModels:  []string{"deepseek/deepseek-v4-pro", "deepseek/deepseek-chat", "anthropic/claude-opus-4-8"},
+		WorkerClaudeModel:  "deepseek-v4-pro",
+		WorkerClaudeModels: []string{"deepseek-v4-pro", "deepseek-v4-flash"},
+	}}
+}
+
+func TestResolveModelsDefaults(t *testing.T) {
+	a := modelApp()
+
+	// Empty request → the engine's deployment defaults.
+	m, em, errMsg := a.resolveModels(k8s.EngineAider, "", "")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if m != "deepseek/deepseek-v4-pro" || em != "deepseek/deepseek-chat" {
+		t.Errorf("aider defaults = (%q, %q)", m, em)
+	}
+
+	m, em, errMsg = a.resolveModels(k8s.EngineClaudeCode, "", "")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if m != "deepseek-v4-pro" || em != "" {
+		t.Errorf("claude defaults = (%q, %q), want editor empty", m, em)
+	}
+}
+
+func TestResolveModelsAllowsListedAndRejectsUnknown(t *testing.T) {
+	a := modelApp()
+
+	m, em, errMsg := a.resolveModels(k8s.EngineAider, "anthropic/claude-opus-4-8", "deepseek/deepseek-chat")
+	if errMsg != "" {
+		t.Fatalf("listed models should be accepted: %s", errMsg)
+	}
+	if m != "anthropic/claude-opus-4-8" || em != "deepseek/deepseek-chat" {
+		t.Errorf("resolved = (%q, %q)", m, em)
+	}
+
+	if _, _, errMsg = a.resolveModels(k8s.EngineAider, "gpt-4o", ""); errMsg == "" {
+		t.Error("an off-list model should be rejected")
+	}
+	if _, _, errMsg = a.resolveModels(k8s.EngineAider, "", "gpt-4o"); errMsg == "" {
+		t.Error("an off-list editor model should be rejected")
+	}
+	// A claude-code model from aider's list must not be accepted (per-engine lists).
+	if _, _, errMsg = a.resolveModels(k8s.EngineClaudeCode, "deepseek/deepseek-v4-pro", ""); errMsg == "" {
+		t.Error("aider-namespaced model should be rejected for claude-code")
+	}
+}
+
+func TestResolveModelsClaudeIgnoresEditor(t *testing.T) {
+	a := modelApp()
+	// claude-code has no editor split; a supplied editor model is ignored, not rejected.
+	m, em, errMsg := a.resolveModels(k8s.EngineClaudeCode, "deepseek-v4-flash", "whatever")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if m != "deepseek-v4-flash" || em != "" {
+		t.Errorf("resolved = (%q, %q), want editor empty", m, em)
+	}
+}
 
 func TestBuildPromptAlwaysRequiresTests(t *testing.T) {
 	prompt := buildPrompt("oglimmer/example", "alice", "add a dark mode toggle")
