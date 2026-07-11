@@ -32,6 +32,7 @@ export interface JobMetadata {
   workerImage?: string
   model?: string
   editorModel?: string
+  autoMerge?: boolean
   reviewMaxRounds?: number
   aiderTimeoutSec?: number
   deepseekBaseURL?: string
@@ -63,6 +64,7 @@ export interface Job {
   engine: Engine
   model?: string
   editorModel?: string
+  autoMerge: boolean
   branch?: string
   prUrl?: string
   reason?: string

@@ -19,6 +19,8 @@
 #                       the PR (falls back to the detected inner-loop command)
 #   AGENT_TEST_CMD      repo's fast inner-loop test command for aider --auto-test;
 #                       empty = detect it from the repo's manifests
+#   AGENT_AUTO_MERGE    "false" leaves the approved PR open for a human to merge;
+#                       anything else (default) squash-merges it automatically
 #   VERIFY_MAX_ROUNDS   corrective aider rounds for the verify gate (default: 2)
 #   AIDER_MODEL         architect (planning) model, default: deepseek/deepseek-v4-pro
 #                       (e.g. anthropic/claude-opus-4-8 to run aider on Claude)
@@ -85,6 +87,11 @@ VERIFY_CMD="${AGENT_VERIFY_CMD:-}"
 # detect it from the repo's manifests. Lets an owner override detection for a
 # non-standard setup without making their heavy VERIFY_CMD run after every edit.
 TEST_CMD="${AGENT_TEST_CMD:-}"
+# Whether to squash-merge the PR automatically once it is approved and green.
+# "false" stops at an approved-but-open PR and leaves the final merge to a human;
+# anything else (default) auto-merges. Only "false" disables it, so an unset or
+# malformed value keeps the original always-merge behaviour.
+AUTO_MERGE="${AGENT_AUTO_MERGE:-true}"
 # Per-invocation caps for command execution. A test/verify script that HANGS
 # (vitest/jest watch mode, a fork-teardown deadlock — job 3d59189a) blocks the
 # subprocess indefinitely: aider's --auto-test then rides out the whole
@@ -1082,6 +1089,9 @@ FAILED_CHECKS=0
 JUDGE_VERDICT=""
 JUDGE_REASON=""
 MERGED=false
+# Set true when the PR was approved+green but AUTO_MERGE is disabled, so it is a
+# successful run that intentionally leaves the merge to a human.
+APPROVED_NO_MERGE=false
 # UTC timestamp of the most recent push; a sticky review comment is only "fresh"
 # once its updated_at passes this. Set immediately before every push.
 REVIEW_SINCE=""
@@ -1124,6 +1134,13 @@ for attempt in $(seq 0 "$REVIEW_MAX_ROUNDS"); do
   fi
 
   if [ "$decision" = "merge" ]; then
+    # Auto-merge disabled: the PR is approved and green, but the final merge is
+    # left to a human. Stop here and report success with the PR still open.
+    if [ "$AUTO_MERGE" = "false" ]; then
+      echo "=== approved (checks green, verdict='${REVIEW_STATE:-none}'); auto-merge disabled — leaving PR open ==="
+      APPROVED_NO_MERGE=true
+      break
+    fi
     echo "=== approved for merge (checks green, verdict='${REVIEW_STATE:-none}'); merging ==="
     MERGE_RESPONSE=$(gh_api PUT "${API}/pulls/${PR_NUMBER}/merge" \
       "$(jq -cn --arg m "squash" '{merge_method:$m}')")
@@ -1153,6 +1170,16 @@ for attempt in $(seq 0 "$REVIEW_MAX_ROUNDS"); do
   REVIEW_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # freshness baseline for this push
   git push origin "$AGENT_BRANCH" || fail "git push (fix) failed"
 done
+
+# Approved, but auto-merge is off by request: a successful run that hands the
+# final merge to a human. Reported as success with merged:false.
+if [ "$APPROVED_NO_MERGE" = "true" ]; then
+  echo "=== done: approved, PR ready for manual merge ${PR_URL} ==="
+  emit_result "$(jq -cn --arg u "$PR_URL" --arg b "$AGENT_BRANCH" \
+    --arg r "auto-merge disabled; PR approved and ready for you to merge" \
+    '{status:"success", pr_url:$u, branch:$b, merged:false, reason:$r}')"
+  exit 0
+fi
 
 if [ "$MERGED" != "true" ]; then
   reason="review not approved after ${REVIEW_MAX_ROUNDS} round(s); PR left open"

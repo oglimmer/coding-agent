@@ -63,12 +63,13 @@ func buildPrompt(repoFullName, username, feature string) string {
 // runs under. Stored as JSON on the job so a run can be analysed after the fact.
 // model/editorModel are the resolved per-job coding models (already defaulted to
 // the engine's deployment default when the request left them empty).
-func (a *App) jobMetadata(repo Repo, engine, model, editorModel string) map[string]any {
+func (a *App) jobMetadata(repo Repo, engine, model, editorModel string, autoMerge bool) map[string]any {
 	m := map[string]any{
 		"platformCommit":  buildinfo.Commit,
 		"platformVersion": buildinfo.Version,
 		"engine":          engine,
 		"model":           model,
+		"autoMerge":       autoMerge,
 		"reviewMaxRounds": a.Cfg.ReviewMaxRounds,
 		"deepseekBaseURL": a.Cfg.DeepSeekBaseURL,
 		"baseBranch":      repo.BaseBranch,
@@ -186,11 +187,15 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Engine      string `json:"engine"`
 		Model       string `json:"model"`
 		EditorModel string `json:"editorModel"`
+		// AutoMerge is a pointer so an omitted field defaults to true (the original
+		// always-merge behaviour) rather than to Go's false zero value.
+		AutoMerge *bool `json:"autoMerge"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	autoMerge := req.AutoMerge == nil || *req.AutoMerge
 	req.Feature = strings.TrimSpace(req.Feature)
 	if len(req.Feature) < minFeatureLength {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("please describe the feature in at least %d characters", minFeatureLength))
@@ -233,7 +238,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist the job in 'checking' so it is visible while the gate runs.
-	job, err := a.Store.CreateJob(r.Context(), repo.ID, u.ID, req.Feature, "checking", engine, model, editorModel)
+	job, err := a.Store.CreateJob(r.Context(), repo.ID, u.ID, req.Feature, "checking", engine, model, editorModel, autoMerge)
 	if err != nil {
 		a.serverErr(w, r, err, "")
 		return
@@ -241,7 +246,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	// Snapshot the platform version + config this job runs under, for later
 	// analysis (it survives independently of the worker pod and its logs).
-	if raw, mErr := json.Marshal(a.jobMetadata(repo, engine, model, editorModel)); mErr == nil {
+	if raw, mErr := json.Marshal(a.jobMetadata(repo, engine, model, editorModel, autoMerge)); mErr == nil {
 		if err := a.Store.SetJobMetadata(r.Context(), job.ID, raw); err != nil {
 			log.Printf("WARN jobs: set metadata for %s: %v", job.ID, err)
 		}
@@ -294,6 +299,7 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		EditorModel:   editorModel,
 		VerifyCommand: repo.VerifyCommand,
 		TestCommand:   repo.TestCommand,
+		AutoMerge:     autoMerge,
 	}
 	if err := a.K8s.Create(r.Context(), spec); err != nil {
 		reason := "failed to start the worker job"

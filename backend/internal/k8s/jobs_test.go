@@ -11,6 +11,7 @@ func TestBuildJob(t *testing.T) {
 		Prompt:     "do the thing",
 		Feature:    "the thing",
 		PRTitle:    "feat: the thing",
+		AutoMerge:  true,
 	}
 	opts := Options{
 		Image:             "ghcr.io/oglimmer/coding-agent-worker:latest",
@@ -72,6 +73,9 @@ func TestBuildJob(t *testing.T) {
 	}
 	if env["AIDER_TIMEOUT"] != "3600" {
 		t.Errorf("AIDER_TIMEOUT = %q", env["AIDER_TIMEOUT"])
+	}
+	if env["AGENT_AUTO_MERGE"] != "true" {
+		t.Errorf("AGENT_AUTO_MERGE = %q, want true", env["AGENT_AUTO_MERGE"])
 	}
 	// With no per-job model on the spec, the Options default is used.
 	if env["AIDER_MODEL"] != "deepseek/deepseek-v4-pro" {
@@ -155,6 +159,22 @@ func TestBuildJobClaudeEngine(t *testing.T) {
 	if !secretKeys["DEEPSEEK_API_KEY"] || !secretKeys["GITHUB_TOKEN"] {
 		t.Errorf("claude engine missing required secrets, got %+v", secretKeys)
 	}
+}
+
+// A job with auto-merge disabled renders AGENT_AUTO_MERGE=false so the worker
+// leaves the approved PR open for a human to merge.
+func TestBuildJobAutoMergeDisabled(t *testing.T) {
+	spec := JobSpec{JobName: "coding-agent-abc", Repo: "oglimmer/example", Branch: "agent/abc", AutoMerge: false}
+	pod := BuildJob(spec, Options{SecretName: "coding-agent-secret"}).Spec.Template.Spec
+	for _, e := range pod.Containers[0].Env {
+		if e.Name == "AGENT_AUTO_MERGE" {
+			if e.Value != "false" {
+				t.Errorf("AGENT_AUTO_MERGE = %q, want false", e.Value)
+			}
+			return
+		}
+	}
+	t.Error("AGENT_AUTO_MERGE env var not set")
 }
 
 // A per-job model on the spec overrides the Options default for each engine.

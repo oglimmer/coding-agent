@@ -99,6 +99,10 @@ func (a *App) reconcileOne(ctx context.Context, job Job) {
 		status, prURL = "success", result.PRURL
 		if result.Merged {
 			reason = "PR reviewed and auto-merged"
+		} else if result.Reason != "" {
+			// e.g. auto-merge disabled: the worker explains the approved PR is left
+			// open for a human to merge.
+			reason = result.Reason
 		} else {
 			reason = "PR opened and reviewed"
 		}

@@ -25,6 +25,9 @@ const engine = ref<Engine>('aider')
 // to the deployment default the backend reports for the selected engine.
 const model = ref('')
 const editorModel = ref('')
+// Whether the worker merges the approved PR itself. Off means the agent takes the
+// PR all the way to approved+green but leaves the final merge to the user.
+const autoMerge = ref(true)
 const submitting = ref(false)
 const formError = ref<string | null>(null)
 const rejected = ref<Job | null>(null)
@@ -67,6 +70,7 @@ async function submit() {
       engine.value,
       model.value,
       editorModel.value,
+      autoMerge.value,
     )
     if (job.status === 'rejected') {
       rejected.value = job
@@ -86,7 +90,8 @@ async function submit() {
     <h1>Request a feature</h1>
     <p class="muted">
       Describe what you want built. The request is safety-checked, then an agent implements it
-      <strong>with tests</strong>, opens a PR, addresses the review, and merges it.
+      <strong>with tests</strong>, opens a PR, and addresses the review — merging it for you, or
+      leaving the final merge to you if you turn auto-merge off.
     </p>
 
     <details class="explainer">
@@ -109,7 +114,7 @@ async function submit() {
           <li><strong>Verify gate.</strong> The repo's real build/lint/test command must pass — the same one CI runs.</li>
           <li><strong>Open a PR</strong> and wait for the repository's GitHub Action review.</li>
           <li><strong>Address the review.</strong> The engine fixes any findings and re-requests review, looping until it's clean.</li>
-          <li><strong>Squash-merge</strong> the PR.</li>
+          <li><strong>Squash-merge</strong> the PR — or, if you turn off auto-merge, stop at an approved, green PR and leave the merge to you.</li>
         </ol>
 
         <div class="engine-explains">
@@ -192,6 +197,20 @@ async function submit() {
       />
       <div class="counter muted">{{ feature.trim().length }} characters (min {{ MIN }})</div>
 
+      <label class="automerge">
+        <input v-model="autoMerge" type="checkbox">
+        <span class="automerge-text">
+          <span class="automerge-title">Auto-merge the PR when approved</span>
+          <span class="automerge-hint muted">
+            {{
+              autoMerge
+                ? 'The agent squash-merges the PR once checks are green and the review approves.'
+                : "The agent takes the PR to approved and green, then leaves the final merge to you."
+            }}
+          </span>
+        </span>
+      </label>
+
       <div v-if="rejected" class="error-banner reject">
         <strong>Request rejected by the safety check.</strong>
         <div>{{ rejected.reason }}</div>
@@ -272,6 +291,27 @@ async function submit() {
   .models {
     grid-template-columns: 1fr;
   }
+}
+.automerge {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin-top: 1rem;
+  cursor: pointer;
+}
+.automerge input {
+  margin-top: 0.15rem;
+}
+.automerge-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.automerge-title {
+  font-weight: 600;
+}
+.automerge-hint {
+  font-size: 0.78rem;
 }
 .reject {
   margin-top: 1rem;

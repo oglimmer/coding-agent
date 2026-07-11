@@ -32,6 +32,7 @@ const metaRows = computed(() => {
   push('Worker image', m.workerImage)
   push('Model', m.model)
   push('Editor model', m.editorModel)
+  if (m.autoMerge !== undefined) push('Auto-merge', m.autoMerge ? 'on' : 'off')
   push('Review rounds', m.reviewMaxRounds)
   push('Agent timeout', m.aiderTimeoutSec ? `${m.aiderTimeoutSec}s` : undefined)
   push('Base branch', m.baseBranch)
@@ -92,6 +93,7 @@ async function retry() {
       job.value.engine,
       job.value.model ?? '',
       job.value.editorModel ?? '',
+      job.value.autoMerge,
     )
     await router.push(`/jobs/${fresh.id}`)
   } catch (e) {

@@ -97,8 +97,14 @@ export const api = {
   getJob: (id: string) => request<Job>('GET', `/jobs/${id}`),
   getJobLogs: (id: string) =>
     request<{ logs: string; unavailable?: boolean }>('GET', `/jobs/${id}/logs`),
-  createJob: (repoId: string, feature: string, engine: Engine, model: string, editorModel: string) =>
-    request<Job>('POST', '/jobs', { repoId, feature, engine, model, editorModel }),
+  createJob: (
+    repoId: string,
+    feature: string,
+    engine: Engine,
+    model: string,
+    editorModel: string,
+    autoMerge: boolean,
+  ) => request<Job>('POST', '/jobs', { repoId, feature, engine, model, editorModel, autoMerge }),
   deleteJob: (id: string) => request<void>('DELETE', `/jobs/${id}`),
 
   listUsers: () => request<User[]>('GET', '/admin/users'),

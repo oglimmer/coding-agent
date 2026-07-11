@@ -2,7 +2,9 @@
 
 Self-service platform where authenticated users request features against configured GitHub
 repositories and an autonomous coding agent implements them end-to-end — **with tests** — opens a
-pull request, waits for the repository's GitHub Action review, fixes the findings, and auto-merges.
+pull request, waits for the repository's GitHub Action review, and fixes the findings. It then
+auto-merges the approved PR, or — if the requester turns auto-merge off — stops at an approved,
+green PR and leaves the final merge to a human.
 
 ## How it works
 
@@ -22,7 +24,9 @@ pull request, waits for the repository's GitHub Action review, fixes the finding
                                    5. wait for the repo's GitHub Action review
                                    6. fix findings with aider, re-review  (up to N rounds)
                                    7. squash-merge once checks are green and the review
-                                      (formal verdict or LLM-judged prose) approves
+                                      (formal verdict or LLM-judged prose) approves —
+                                      unless the requester disabled auto-merge, then the
+                                      approved PR is left open for a human to merge
                           ◀── backend watcher polls the Job, records status + PR URL
 ```
 
@@ -36,6 +40,9 @@ pull request, waits for the repository's GitHub Action review, fixes the finding
 - **Harmful requests are blocked** by a DeepSeek classifier before any compute is spent.
 - The **prompt always requires tests**, even when the user doesn't mention them.
 - The **review→fix→merge loop** is what distinguishes this from a fire-and-forget PR bot.
+- **Auto-merge is optional per request.** By default the agent squash-merges the approved PR; a
+  requester can turn this off to keep the final merge as a manual, human step (the agent still takes
+  the PR all the way to approved and green).
 
 This reuses the proven `/vibecode` mechanism from `vibe-coding-discord-bot` (k8s Job + aider +
 DeepSeek), ported to Go and extended with the review loop.
@@ -90,7 +97,9 @@ helm install coding-agent helm/coding-agent \
   `CHANGES_REQUESTED` review state alongside CI status checks. It waits for CI to finish and the
   reviewer to respond, then: **fixes** when a check fails, the review is `CHANGES_REQUESTED`, or an
   LLM judge rules the prose review requests changes (up to `REVIEW_MAX_ROUNDS`), and
-  **squash-merges** once checks are green and the review approves.
+  **squash-merges** once checks are green and the review approves. Per-job auto-merge
+  (`AGENT_AUTO_MERGE`) can be turned off in the New Job form: the worker then stops at the
+  approved, green PR and reports success with the PR left open for a human to merge.
 - Coding agent = aider + `deepseek/deepseek-v4-pro` (swappable via `WORKER_MODEL`).
 
 ## License

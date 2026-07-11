@@ -47,6 +47,7 @@ type JobSpec struct {
 	EditorModel   string // per-job aider editor model; empty = Options default; unused by claude-code
 	VerifyCommand string // repo's build/lint/test gate; empty = worker detects one
 	TestCommand   string // repo's fast inner-loop test cmd; empty = worker detects one
+	AutoMerge     bool   // true = worker squash-merges the approved PR; false = leave it open for a human
 }
 
 // Options configure how Jobs are built (image, secrets, resource wiring).
@@ -115,6 +116,15 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+// boolEnv renders a bool as the "true"/"false" string the worker scripts test
+// AGENT_AUTO_MERGE against.
+func boolEnv(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
 func pullPolicy(p string) corev1.PullPolicy {
 	switch p {
 	case "IfNotPresent":
@@ -179,6 +189,7 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 		{Name: "AGENT_PR_TITLE", Value: spec.PRTitle},
 		{Name: "AGENT_VERIFY_CMD", Value: spec.VerifyCommand},
 		{Name: "AGENT_TEST_CMD", Value: spec.TestCommand},
+		{Name: "AGENT_AUTO_MERGE", Value: boolEnv(spec.AutoMerge)},
 		{Name: "DEEPSEEK_BASE_URL", Value: opts.DeepSeekBaseURL},
 		{Name: "GITHUB_BOT_LOGIN", Value: opts.GitHubBotLogin},
 		{Name: "REVIEW_MAX_ROUNDS", Value: fmt.Sprintf("%d", opts.ReviewMaxRounds)},
