@@ -62,26 +62,29 @@ func NewRouter(a *App) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(a.authMiddleware)
 
-			// Read surface — available to every authenticated user, viewers
-			// included.
+			// Available to every authenticated user, viewers included: their own
+			// profile and the static client config carry no platform data.
 			r.Get("/me", a.handleMe)
 			r.Get("/config", a.handleClientConfig)
-			r.Get("/repos", a.handleListRepos)
-			r.Get("/jobs", a.handleListJobs)
-			r.Get("/jobs/{id}", a.handleGetJob)
-			r.Get("/jobs/{id}/logs", a.handleJobLogs)
 
-			// Write surface — users and admins only; viewers are read-only.
+			// Data-read surface — users and admins only. Viewers are provisioned
+			// but see no repos, jobs, or logs until an admin promotes them.
 			r.Group(func(r chi.Router) {
-				r.Use(a.requireWriterMiddleware)
+				r.Use(a.requireReaderMiddleware)
+
+				r.Get("/repos", a.handleListRepos)
+				r.Get("/jobs", a.handleListJobs)
+				r.Get("/jobs/{id}", a.handleGetJob)
+				r.Get("/jobs/{id}/logs", a.handleJobLogs)
+			})
+
+			// Write surface — admins only. Users have full read visibility but
+			// cannot start, delete, or otherwise mutate anything.
+			r.Group(func(r chi.Router) {
+				r.Use(a.requireAdminMiddleware)
 
 				r.Post("/jobs", a.handleCreateJob)
 				r.Delete("/jobs/{id}", a.handleDeleteJob)
-			})
-
-			// Admin-only.
-			r.Group(func(r chi.Router) {
-				r.Use(a.requireAdminMiddleware)
 
 				r.Post("/repos", a.handleCreateRepo)
 				r.Put("/repos/{id}", a.handleUpdateRepo)

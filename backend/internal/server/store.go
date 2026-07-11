@@ -27,9 +27,12 @@ func (r Role) Valid() bool {
 	return r == RoleViewer || r == RoleUser || r == RoleAdmin
 }
 
-// CanWrite reports whether the role may create or mutate its own resources
-// (i.e. submit feature requests). Viewers are read-only.
-func (r Role) CanWrite() bool {
+// CanReadData reports whether the role may read platform data (repos, jobs,
+// logs). Users have full read visibility across the platform; admins can
+// additionally mutate. Viewers are provisioned but hold no data access until an
+// admin promotes them — they can only see their own profile and the static
+// client config.
+func (r Role) CanReadData() bool {
 	return r == RoleUser || r == RoleAdmin
 }
 
@@ -47,8 +50,8 @@ type User struct {
 // IsAdmin reports whether the user holds the admin role.
 func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
 
-// CanWrite reports whether the user may create or mutate their own resources.
-func (u User) CanWrite() bool { return u.Role.CanWrite() }
+// CanReadData reports whether the user may read platform data (repos, jobs, logs).
+func (u User) CanReadData() bool { return u.Role.CanReadData() }
 
 // Repo is a GitHub repository users can target.
 type Repo struct {

@@ -53,8 +53,9 @@ async function changeRole(u: User, role: Role) {
   <div class="container">
     <h1>Admin · Users</h1>
     <p class="muted">
-      New accounts start as <strong>viewers</strong> (read-only). Promote to <strong>user</strong> to let them
-      submit feature requests, or <strong>admin</strong> to also manage repositories and other users.
+      New accounts start as <strong>viewers</strong> with no access. Promote to <strong>user</strong> to grant
+      full read visibility across all repos and jobs, or <strong>admin</strong> to also submit feature
+      requests, delete jobs, and manage repositories and other users.
     </p>
 
     <p v-if="actionError" class="error-banner">{{ actionError }}</p>

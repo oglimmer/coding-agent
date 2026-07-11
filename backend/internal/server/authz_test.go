@@ -9,10 +9,10 @@ import (
 
 func TestRoleCapabilities(t *testing.T) {
 	cases := []struct {
-		role     Role
-		valid    bool
-		canWrite bool
-		isAdmin  bool
+		role    Role
+		valid   bool
+		canRead bool
+		isAdmin bool
 	}{
 		{RoleViewer, true, false, false},
 		{RoleUser, true, true, false},
@@ -24,12 +24,35 @@ func TestRoleCapabilities(t *testing.T) {
 		if got := c.role.Valid(); got != c.valid {
 			t.Errorf("%q.Valid() = %v, want %v", c.role, got, c.valid)
 		}
-		if got := c.role.CanWrite(); got != c.canWrite {
-			t.Errorf("%q.CanWrite() = %v, want %v", c.role, got, c.canWrite)
+		if got := c.role.CanReadData(); got != c.canRead {
+			t.Errorf("%q.CanReadData() = %v, want %v", c.role, got, c.canRead)
 		}
 		if got := (User{Role: c.role}).IsAdmin(); got != c.isAdmin {
 			t.Errorf("User{%q}.IsAdmin() = %v, want %v", c.role, got, c.isAdmin)
 		}
+	}
+}
+
+func TestRequireReaderMiddleware(t *testing.T) {
+	a := &App{}
+	cases := []struct {
+		name string
+		user *User
+		want int
+	}{
+		{"viewer forbidden", &User{Role: RoleViewer}, http.StatusForbidden},
+		{"user allowed", &User{Role: RoleUser}, http.StatusOK},
+		{"admin allowed", &User{Role: RoleAdmin}, http.StatusOK},
+		{"no user forbidden", nil, http.StatusForbidden},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			a.requireReaderMiddleware(okHandler()).ServeHTTP(rec, withUser(c.user))
+			if rec.Code != c.want {
+				t.Errorf("status = %d, want %d", rec.Code, c.want)
+			}
+		})
 	}
 }
 
@@ -46,29 +69,6 @@ func okHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-}
-
-func TestRequireWriterMiddleware(t *testing.T) {
-	a := &App{}
-	cases := []struct {
-		name string
-		user *User
-		want int
-	}{
-		{"viewer forbidden", &User{Role: RoleViewer}, http.StatusForbidden},
-		{"user allowed", &User{Role: RoleUser}, http.StatusOK},
-		{"admin allowed", &User{Role: RoleAdmin}, http.StatusOK},
-		{"no user forbidden", nil, http.StatusForbidden},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			a.requireWriterMiddleware(okHandler()).ServeHTTP(rec, withUser(c.user))
-			if rec.Code != c.want {
-				t.Errorf("status = %d, want %d", rec.Code, c.want)
-			}
-		})
-	}
 }
 
 func TestRequireAdminMiddleware(t *testing.T) {

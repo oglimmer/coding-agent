@@ -13,8 +13,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => token.value !== null)
   const isAdmin = computed(() => user.value?.role === 'admin')
-  // Viewers are read-only; users and admins may submit feature requests.
-  const canWrite = computed(() => user.value?.role === 'user' || user.value?.role === 'admin')
+  // Only admins may mutate — submit feature requests, delete jobs, manage repos.
+  // Users have full read visibility but are otherwise read-only.
+  const canWrite = computed(() => user.value?.role === 'admin')
   // Viewers have no access yet — they are held on the pending screen until an
   // admin promotes them.
   const isPending = computed(() => user.value?.role === 'viewer')

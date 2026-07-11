@@ -28,12 +28,12 @@ describe('useAuthStore', () => {
     expect(auth.isPending).toBe(true)
   })
 
-  it('treats a user as a writer but not admin or pending', () => {
+  it('treats a user as read-only (not a writer, admin, or pending)', () => {
     const auth = useAuthStore()
     const token = makeJwt(Math.floor(Date.now() / 1000) + 3600)
     auth.setSession(token, { id: '3', email: 'u@b.c', name: 'U', role: 'user', createdAt: '' })
     expect(auth.isAdmin).toBe(false)
-    expect(auth.canWrite).toBe(true)
+    expect(auth.canWrite).toBe(false)
     expect(auth.isPending).toBe(false)
   })
 

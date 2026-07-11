@@ -78,7 +78,7 @@ async function remove(job: Job) {
             <td class="nowrap">
               <a v-if="job.prUrl" :href="job.prUrl" target="_blank" rel="noopener">PR ↗</a>
               <RouterLink :to="`/jobs/${job.id}`">Details</RouterLink>
-              <button class="link-btn" title="Delete job" @click="remove(job)">Delete</button>
+              <button v-if="auth.canWrite" class="link-btn" title="Delete job" @click="remove(job)">Delete</button>
             </td>
           </tr>
         </tbody>

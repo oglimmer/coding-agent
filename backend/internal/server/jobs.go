@@ -323,12 +323,12 @@ func (a *App) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 const jobLogTailLines = 2000
 
 // handleJobLogs streams the worker pod's recent log output for a job so the UI
-// can show live progress while the agent works. Owner or admin only, mirroring
-// handleGetJob. A job that never spawned a pod (still checking, rejected, or no
-// cluster configured) and a pod that has already been TTL-cleaned both return an
-// empty body rather than an error, so the frontend can poll uniformly.
+// can show live progress while the agent works. Reader-gated like handleGetJob,
+// so any user or admin may read any job's logs; viewers never reach it. A job
+// that never spawned a pod (still checking, rejected, or no cluster configured)
+// and a pod that has already been TTL-cleaned both return an empty body rather
+// than an error, so the frontend can poll uniformly.
 func (a *App) handleJobLogs(w http.ResponseWriter, r *http.Request) {
-	u, _ := userFromContext(r.Context())
 	job, err := a.Store.JobByID(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		if err == ErrNotFound {
@@ -336,10 +336,6 @@ func (a *App) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.serverErr(w, r, err, "")
-		return
-	}
-	if job.UserID != u.ID && !u.IsAdmin() {
-		writeErr(w, http.StatusForbidden, "not your job")
 		return
 	}
 
@@ -377,12 +373,14 @@ func (a *App) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"logs": logs})
 }
 
-// handleListJobs returns the caller's jobs, or all jobs for admins.
+// handleListJobs returns jobs the caller may see. Users have full read
+// visibility and always see every job. Admins are the only role that owns jobs,
+// so they default to their own and can widen to everyone's with ?all=true.
 func (a *App) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFromContext(r.Context())
-	filter := u.ID
-	if u.IsAdmin() && r.URL.Query().Get("all") == "true" {
-		filter = ""
+	filter := ""
+	if u.IsAdmin() && r.URL.Query().Get("all") != "true" {
+		filter = u.ID
 	}
 	jobs, err := a.Store.ListJobs(r.Context(), filter, 100)
 	if err != nil {
@@ -395,9 +393,9 @@ func (a *App) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jobs)
 }
 
-// handleGetJob returns one job. Non-admins may only see their own.
+// handleGetJob returns one job. The route is reader-gated, so any user or admin
+// may see any job; viewers never reach it.
 func (a *App) handleGetJob(w http.ResponseWriter, r *http.Request) {
-	u, _ := userFromContext(r.Context())
 	job, err := a.Store.JobByID(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		if err == ErrNotFound {
@@ -405,19 +403,14 @@ func (a *App) handleGetJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.serverErr(w, r, err, "")
-		return
-	}
-	if job.UserID != u.ID && !u.IsAdmin() {
-		writeErr(w, http.StatusForbidden, "not your job")
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
 }
 
-// handleDeleteJob removes a job (and best-effort deletes its k8s Job). Owner or
-// admin only. Useful to clean up finished/failed jobs.
+// handleDeleteJob removes a job (and best-effort deletes its k8s Job). Admin
+// only — the route is admin-gated. Useful to clean up finished/failed jobs.
 func (a *App) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
-	u, _ := userFromContext(r.Context())
 	job, err := a.Store.JobByID(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		if err == ErrNotFound {
@@ -425,10 +418,6 @@ func (a *App) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.serverErr(w, r, err, "")
-		return
-	}
-	if job.UserID != u.ID && !u.IsAdmin() {
-		writeErr(w, http.StatusForbidden, "not your job")
 		return
 	}
 

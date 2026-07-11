@@ -5,6 +5,7 @@ import { api, errMsg } from '@/api'
 import { useAsyncData } from '@/composables/useAsyncData'
 import { useAutoReload } from '@/composables/useAutoReload'
 import { useConfirm } from '@/composables/useConfirm'
+import { useAuthStore } from '@/stores/auth'
 import { relativeTime } from '@/lib/format'
 import StatusBadge from '@/components/StatusBadge.vue'
 import JobLog from '@/components/JobLog.vue'
@@ -12,6 +13,7 @@ import type { Job } from '@/types'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
+const auth = useAuthStore()
 const { confirm } = useConfirm()
 const { data: job, loading, error, reload } = useAsyncData<Job | null>(() => api.getJob(props.id), null)
 
@@ -168,8 +170,8 @@ async function remove() {
         <a v-if="job.prUrl" :href="job.prUrl" target="_blank" rel="noopener" class="btn btn-primary">
           View pull request ↗
         </a>
-        <button v-if="canRetry" class="btn" :disabled="busy" @click="retry">Retry</button>
-        <button class="btn btn-danger" :disabled="busy" @click="remove">
+        <button v-if="auth.canWrite && canRetry" class="btn" :disabled="busy" @click="retry">Retry</button>
+        <button v-if="auth.canWrite" class="btn btn-danger" :disabled="busy" @click="remove">
           {{ inFlight ? 'Cancel & delete' : 'Delete' }}
         </button>
       </div>

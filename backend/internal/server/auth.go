@@ -95,13 +95,14 @@ func (a *App) requireAdminMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// requireWriterMiddleware gates routes that create or mutate resources. Viewers
-// are read-only until an admin promotes them to user or admin.
-func (a *App) requireWriterMiddleware(next http.Handler) http.Handler {
+// requireReaderMiddleware gates routes that expose platform data (repos, jobs,
+// logs). Viewers hold no data access until an admin promotes them; they can
+// still reach their own profile and the static client config.
+func (a *App) requireReaderMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, ok := userFromContext(r.Context())
-		if !ok || !u.CanWrite() {
-			writeErr(w, http.StatusForbidden, "write access required; ask an admin to grant you access")
+		if !ok || !u.CanReadData() {
+			writeErr(w, http.StatusForbidden, "read access required; ask an admin to grant you access")
 			return
 		}
 		next.ServeHTTP(w, r)
