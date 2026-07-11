@@ -14,7 +14,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="$(node -p "require('${ROOT}/frontend/package.json').version" 2>/dev/null || echo "0.0.0")"
+# Version = frontend/package.json's "version" (single source of truth). Parsed
+# with sed, not node: the CI build runner (arc-coding-agent, DinD) has no
+# Node.js, so the old `node -p ...` call silently failed and shipped every
+# image as 0.0.0. Warn loudly rather than fall back quietly if it can't be read.
+VERSION="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT}/frontend/package.json")"
+VERSION="${VERSION%%$'\n'*}"
+if [ -z "$VERSION" ]; then
+  printf '\033[1;31mWARNING:\033[0m could not read version from frontend/package.json; using 0.0.0\n' >&2
+  VERSION="0.0.0"
+fi
 GIT_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo none)"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 REGISTRY="ghcr.io/oglimmer"
