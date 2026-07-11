@@ -89,6 +89,54 @@ async function submit() {
       <strong>with tests</strong>, opens a PR, addresses the review, and merges it.
     </p>
 
+    <details class="explainer">
+      <summary>
+        <span class="explainer-title">How does the agent build this?</span>
+        <span class="explainer-chevron" aria-hidden="true">▸</span>
+      </summary>
+      <div class="explainer-body">
+        <p class="muted explainer-intro">
+          Every request runs the same end-to-end pipeline — the only difference is the
+          <strong>coding engine</strong> that writes the change. Both engines are DeepSeek-backed by
+          default.
+        </p>
+
+        <ol class="flow">
+          <li><strong>Safety check.</strong> Your description is screened before any code runs; unsafe or out-of-scope requests are rejected.</li>
+          <li><strong>Clone.</strong> A fresh, isolated checkout of the repository on a new branch.</li>
+          <li><strong>Implement (with tests).</strong> The coding engine writes the feature and its tests — see the two engines below.</li>
+          <li><strong>Self-review gate.</strong> The diff is critiqued and corrected before it ever leaves the sandbox.</li>
+          <li><strong>Verify gate.</strong> The repo's real build/lint/test command must pass — the same one CI runs.</li>
+          <li><strong>Open a PR</strong> and wait for the repository's GitHub Action review.</li>
+          <li><strong>Address the review.</strong> The engine fixes any findings and re-requests review, looping until it's clean.</li>
+          <li><strong>Squash-merge</strong> the PR.</li>
+        </ol>
+
+        <div class="engine-explains">
+          <div class="engine-explain">
+            <h3>aider <span class="muted tag">architect mode</span></h3>
+            <p class="muted">
+              A cheap model first <strong>scopes</strong> the task — picking the relevant files and
+              detecting the test command. Then aider runs a two-model split: an
+              <strong>architect model</strong> reasons about <em>what</em> to change and an
+              <strong>editor model</strong> turns that plan into precise edits. It re-runs the repo's
+              fast test suite after each edit (<code>--auto-test</code>) and keeps going until the
+              change is green.
+            </p>
+          </div>
+          <div class="engine-explain">
+            <h3>Claude Code <span class="muted tag">agentic</span></h3>
+            <p class="muted">
+              A single autonomous agent drives the whole change. Claude Code
+              <strong>explores the repo, edits files, and runs tests itself</strong>, deciding what to
+              read and run as it goes — so there's no separate scoping step, no architect/editor split,
+              and no test-command detection. One model, one loop.
+            </p>
+          </div>
+        </div>
+      </div>
+    </details>
+
     <p v-if="loading" class="muted">Loading repositories…</p>
     <p v-else-if="error" class="error-banner">{{ error }}</p>
     <p v-else-if="repos.length === 0" class="muted">No repositories are configured yet.</p>
@@ -229,5 +277,99 @@ async function submit() {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+/* --- process explainer --- */
+.explainer {
+  margin: 1rem 0 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.explainer > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.85rem 1.1rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.explainer > summary::-webkit-details-marker {
+  display: none;
+}
+.explainer > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius);
+}
+.explainer-title {
+  font-weight: 600;
+}
+.explainer-chevron {
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+.explainer[open] .explainer-chevron {
+  transform: rotate(90deg);
+}
+.explainer-body {
+  padding: 0 1.1rem 1.1rem;
+  border-top: 1px solid var(--border);
+}
+.explainer-intro {
+  margin-top: 1rem;
+  font-size: 0.88rem;
+}
+.flow {
+  margin: 0.5rem 0 1.25rem;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+}
+.flow li {
+  color: var(--text-muted);
+}
+.flow li strong {
+  color: var(--text);
+}
+.engine-explains {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.engine-explain {
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.engine-explain h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+.engine-explain .tag {
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.engine-explain p {
+  margin: 0;
+  font-size: 0.83rem;
+}
+.engine-explain code {
+  font-size: 0.9em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--surface-hover);
+}
+@media (max-width: 520px) {
+  .engine-explains {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
