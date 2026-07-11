@@ -116,8 +116,9 @@ async function submit() {
           <div class="engine-explain">
             <h3>aider <span class="muted tag">architect mode</span></h3>
             <p class="muted">
-              A cheap model first <strong>scopes</strong> the task — picking the relevant files and
-              detecting the test command. Then aider runs a two-model split: an
+              A cheap model first <strong>scopes</strong> the task — picking the relevant files. It
+              uses the repo's configured test command (falling back to detecting one if none is set).
+              Then aider runs a two-model split: an
               <strong>architect model</strong> reasons about <em>what</em> to change and an
               <strong>editor model</strong> turns that plan into precise edits. It re-runs the repo's
               fast test suite after each edit (<code>--auto-test</code>) and keeps going until the
