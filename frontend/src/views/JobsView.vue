@@ -104,6 +104,10 @@ async function remove(job: Job) {
 .table-wrap {
   padding: 0;
   overflow-x: auto;
+  /* Pin the vertical axis: per spec, overflow-x:auto with overflow-y:visible
+     forces overflow-y to compute as auto, which shows a phantom vertical
+     scrollbar whenever the horizontal scrollbar reserves height. */
+  overflow-y: hidden;
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
