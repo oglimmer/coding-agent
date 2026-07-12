@@ -105,6 +105,14 @@ func New(opts Options) (*Client, error) {
 			return nil, fmt.Errorf("k8s: no in-cluster or local kubeconfig: %w", err)
 		}
 	}
+	// client-go defaults to QPS=5/Burst=10. The UI polls /jobs/{id}/logs while a
+	// job runs, and each poll makes a LIST + GetLogs call; with several tabs (or
+	// the app's own pod-status watches) that budget is exhausted in seconds,
+	// client-side throttling queues requests for seconds, and the pile-up starves
+	// the process enough that the liveness probe times out and the pod restarts.
+	// Raise the ceiling well above steady-state so log polling never throttles.
+	cfg.QPS = 50
+	cfg.Burst = 100
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: build clientset: %w", err)

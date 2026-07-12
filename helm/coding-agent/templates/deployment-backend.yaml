@@ -121,12 +121,18 @@ spec:
               port: {{ .Values.backend.service.port }}
             initialDelaySeconds: 5
             periodSeconds: 15
+            # /healthz is a static "ok"; the default 1s timeout only fails when the
+            # process is transiently CPU-starved (e.g. a burst of log polling), which
+            # is not a reason to restart. Give it headroom before killing the pod.
+            timeoutSeconds: 5
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /readyz
               port: {{ .Values.backend.service.port }}
             initialDelaySeconds: 3
             periodSeconds: 10
+            timeoutSeconds: 3
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
           securityContext:
