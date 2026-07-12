@@ -1,13 +1,14 @@
 # coding-agent worker: clones a target repo, runs aider (DeepSeek) on a feature
 # request, opens a PR, drives the GitHub Action review->fix loop, and merges.
 #
-# Ships Go + Node toolchains (Python comes with the base image) so aider's
+# Ships Go + Node + JDK toolchains (Python comes with the base image) so aider's
 # --auto-test loop can actually run the target repo's test suite: local
 # compiler/test feedback is the main quality lever for the coding model.
 FROM python:3.12-slim
 
 ARG TARGETARCH
 ARG GO_VERSION=1.26.4
+ARG JAVA_VERSION=21
 
 # git: clone/push; curl+jq: GitHub REST API and log-marker JSON.
 # nodejs (NodeSource LTS): run JS/TS repo test suites (npm ci && npm test).
@@ -24,6 +25,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
     | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
+
+# JDK: run JVM repo test suites via the Maven/Gradle wrapper (./mvnw, ./gradlew).
+# Target repos may pin Java 21 (Spring Boot 4.x), newer than Debian bookworm's
+# default-jdk (17), so fetch a pinned Temurin build instead — same "bake the
+# toolchain, never download at runtime" rule as the Go install above. The
+# Adoptium API redirects to the latest GA binary for the arch; map Docker's
+# TARGETARCH (amd64/arm64) to Temurin's arch names (x64/aarch64).
+RUN case "$TARGETARCH" in \
+      amd64) JARCH=x64 ;; \
+      arm64) JARCH=aarch64 ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://api.adoptium.net/v3/binary/latest/${JAVA_VERSION}/ga/linux/${JARCH}/jdk/hotspot/normal/eclipse" \
+    | tar -C /opt -xz && \
+    mv /opt/jdk-* /opt/java
+ENV JAVA_HOME=/opt/java
+ENV PATH="/opt/java/bin:${PATH}"
 
 # Aider lives in its own venv so it never conflicts with a cloned repo's deps.
 RUN python -m venv /opt/aider && \
