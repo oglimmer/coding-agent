@@ -26,6 +26,9 @@ func (a *App) StartWatcher(ctx context.Context, wg *sync.WaitGroup) {
 		log.Printf("INFO watcher: k8s not configured, job watcher disabled")
 		return
 	}
+	// The pod-log cache is only exercised when k8s is configured; reap idle
+	// entries on the same lifecycle as the watcher.
+	a.podLogs.startReaper(ctx, wg)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

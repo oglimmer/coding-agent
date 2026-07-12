@@ -120,8 +120,11 @@ backend:
       cpu: 50m
       memory: 64Mi
     limits:
-      cpu: 500m
-      memory: 256Mi
+      # 500m throttled the process under job-log polling load, starving the
+      # liveness probe into restarts; 1 core plus headroom for buffered log
+      # tails keeps it responsive.
+      cpu: 1000m
+      memory: 512Mi
   securityContext:
     runAsNonRoot: true
     runAsUser: 65532

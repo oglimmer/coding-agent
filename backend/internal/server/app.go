@@ -31,6 +31,10 @@ type App struct {
 
 	ready atomic.Bool
 
+	// podLogs coalesces and briefly caches worker-pod log tails so the polling
+	// job-detail view does not hit the k8s API server on every request.
+	podLogs *podLogCache
+
 	// cooldownMu guards lastRunPerUser, the per-user rate-limit clock.
 	cooldownMu     sync.Mutex
 	lastRunPerUser map[string]time.Time
@@ -45,6 +49,7 @@ func NewApp(cfg config.Config, pool *sql.DB, ds *deepseek.Client, kc *k8s.Client
 		DeepSeek:       ds,
 		K8s:            kc,
 		OIDC:           oidc,
+		podLogs:        newPodLogCache(),
 		lastRunPerUser: make(map[string]time.Time),
 	}
 }

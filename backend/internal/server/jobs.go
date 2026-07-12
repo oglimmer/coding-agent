@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -362,7 +363,11 @@ func (a *App) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logs, err := a.K8s.PodLogs(r.Context(), job.K8sJobName, jobLogTailLines)
+	// Serve through the short-TTL cache so a burst of polls (and multiple
+	// viewers) collapses to one k8s API call instead of a LIST + GetLogs each.
+	logs, err := a.podLogs.get(job.K8sJobName, func(ctx context.Context) (string, error) {
+		return a.K8s.PodLogs(ctx, job.K8sJobName, jobLogTailLines)
+	})
 	if err != nil || logs == "" {
 		// Pod not started yet, or cleaned up after finishing. Serve the persisted
 		// log if we have one; otherwise report "nothing yet" so the UI keeps polling.
