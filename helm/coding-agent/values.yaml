@@ -152,7 +152,9 @@ frontend:
   securityContext: {}
 
 postgres:
-  enabled: true
+  # Migrated to the central shared PostgreSQL (postgres.default.svc.cluster.local).
+  # The app now reads DATABASE_URL from its Secret instead of a bundled StatefulSet.
+  enabled: false
   image:
     # Pin the MAJOR version: the data dir is tied to it (disable Renovate major bumps).
     repository: postgres
