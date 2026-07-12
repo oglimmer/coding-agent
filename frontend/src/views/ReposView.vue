@@ -361,4 +361,23 @@ function requestFeature(repo: Repo) {
   padding: 2rem;
   text-align: center;
 }
+
+@media (max-width: 640px) {
+  /* Stack the repo info above its action buttons and let the buttons share the
+     row full-width, instead of overflowing off the right edge. */
+  .item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.85rem;
+  }
+  .item .actions {
+    flex-wrap: wrap;
+  }
+  .item .actions .btn {
+    flex: 1 1 auto;
+  }
+  .verify code {
+    overflow-wrap: anywhere;
+  }
+}
 </style>

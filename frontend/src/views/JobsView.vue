@@ -230,4 +230,32 @@ async function remove(job: Job) {
   width: auto;
   padding: 0.3rem 0.5rem;
 }
+
+@media (max-width: 640px) {
+  .head {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  /* The repo name keeps the first line; status · time · actions drop to a second
+     line and wrap among themselves rather than blowing out the row width. */
+  .job-line {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .repo {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .job-meta {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+  }
+  .job-actions {
+    margin-left: auto;
+  }
+}
 </style>

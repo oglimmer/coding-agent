@@ -222,6 +222,7 @@ async function remove() {
 }
 .meta dd {
   margin: 0.1rem 0 0;
+  overflow-wrap: anywhere;
 }
 .note {
   margin-top: 1.5rem;
