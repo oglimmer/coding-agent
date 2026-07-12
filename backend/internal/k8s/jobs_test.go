@@ -249,6 +249,46 @@ func TestBuildJobOmitsOptionalFields(t *testing.T) {
 	}
 }
 
+func TestBuildJobResources(t *testing.T) {
+	// Explicit opts values flow through to the container resource envelope.
+	job := BuildJob(JobSpec{JobName: "j"}, Options{
+		SecretName:    "s",
+		CPURequest:    "750m",
+		CPULimit:      "3",
+		MemoryRequest: "2Gi",
+		MemoryLimit:   "6Gi",
+	})
+	res := job.Spec.Template.Spec.Containers[0].Resources
+	if got := res.Requests.Cpu().String(); got != "750m" {
+		t.Errorf("cpu request = %q, want 750m", got)
+	}
+	if got := res.Requests.Memory().String(); got != "2Gi" {
+		t.Errorf("memory request = %q, want 2Gi", got)
+	}
+	if got := res.Limits.Cpu().String(); got != "3" {
+		t.Errorf("cpu limit = %q, want 3", got)
+	}
+	if got := res.Limits.Memory().String(); got != "6Gi" {
+		t.Errorf("memory limit = %q, want 6Gi", got)
+	}
+
+	// Empty/invalid opts fall back to the JVM-sized defaults rather than panicking.
+	def := BuildJob(JobSpec{JobName: "j"}, Options{SecretName: "s", MemoryLimit: "not-a-quantity"}).
+		Spec.Template.Spec.Containers[0].Resources
+	if got := def.Requests.Cpu().String(); got != "500m" {
+		t.Errorf("default cpu request = %q, want 500m", got)
+	}
+	if got := def.Requests.Memory().String(); got != "1Gi" {
+		t.Errorf("default memory request = %q, want 1Gi", got)
+	}
+	if got := def.Limits.Cpu().String(); got != "2" {
+		t.Errorf("default cpu limit = %q, want 2 (2000m)", got)
+	}
+	if got := def.Limits.Memory().String(); got != "4Gi" {
+		t.Errorf("default memory limit = %q, want 4Gi", got)
+	}
+}
+
 func TestParseResult(t *testing.T) {
 	tests := []struct {
 		name       string

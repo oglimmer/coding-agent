@@ -62,6 +62,10 @@ func main() {
 		ReviewMaxRounds:   cfg.ReviewMaxRounds,
 		ActiveDeadlineSec: int64(cfg.JobTimeout.Seconds()),
 		AiderTimeoutSec:   cfg.AiderTimeoutSec,
+		CPURequest:        cfg.WorkerCPURequest,
+		CPULimit:          cfg.WorkerCPULimit,
+		MemoryRequest:     cfg.WorkerMemoryRequest,
+		MemoryLimit:       cfg.WorkerMemoryLimit,
 	})
 	if err != nil {
 		log.Printf("WARN k8s: cluster not available, worker jobs disabled: %v", err)

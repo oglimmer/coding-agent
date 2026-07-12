@@ -68,6 +68,13 @@ type Options struct {
 	ReviewMaxRounds   int
 	ActiveDeadlineSec int64
 	AiderTimeoutSec   int // seconds per aider round before it is killed
+
+	// Worker container resource envelope as k8s quantity strings; empty falls
+	// back to the built-in default. Sized for JVM/Spring Boot test contexts.
+	CPURequest    string
+	CPULimit      string
+	MemoryRequest string
+	MemoryLimit   string
 }
 
 // Result is the parsed worker outcome.
@@ -123,6 +130,18 @@ func boolEnv(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// quantityOr parses a k8s resource quantity, falling back to def when the
+// configured value is empty or malformed so a bad env var can never panic the
+// server at Job-build time. def is a trusted literal and must be valid.
+func quantityOr(s, def string) resource.Quantity {
+	if s != "" {
+		if q, err := resource.ParseQuantity(s); err == nil {
+			return q
+		}
+	}
+	return resource.MustParse(def)
 }
 
 func pullPolicy(p string) corev1.PullPolicy {
@@ -239,12 +258,12 @@ func BuildJob(spec JobSpec, opts Options) *batchv1.Job {
 			Env:             env,
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("100m"),
-					corev1.ResourceMemory: resource.MustParse("512Mi"),
+					corev1.ResourceCPU:    quantityOr(opts.CPURequest, "500m"),
+					corev1.ResourceMemory: quantityOr(opts.MemoryRequest, "1Gi"),
 				},
 				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("2000m"),
-					corev1.ResourceMemory: resource.MustParse("2Gi"),
+					corev1.ResourceCPU:    quantityOr(opts.CPULimit, "2000m"),
+					corev1.ResourceMemory: quantityOr(opts.MemoryLimit, "4Gi"),
 				},
 			},
 		}},

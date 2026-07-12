@@ -71,6 +71,15 @@ type Config struct {
 	ReviewMaxRounds       int
 	AiderTimeoutSec       int // seconds per aider round before it is killed
 	WatchInterval         time.Duration
+
+	// Worker Job resource envelope (k8s quantities). Defaults are sized for the
+	// heaviest workload the worker runs — a full JVM/Spring Boot test context
+	// under Maven, which OOM/CPU-starved and died mid-startup under the old
+	// 2Gi/100m box, failing the baseline verify before any coding happened.
+	WorkerCPURequest    string
+	WorkerCPULimit      string
+	WorkerMemoryRequest string
+	WorkerMemoryLimit   string
 }
 
 // Load reads configuration from the environment. Malformed optional values log
@@ -119,6 +128,11 @@ func Load() Config {
 		ReviewMaxRounds:       parseInt("REVIEW_MAX_ROUNDS", 3),
 		AiderTimeoutSec:       parseInt("AIDER_TIMEOUT", 3600),
 		WatchInterval:         parseDuration("WATCH_INTERVAL", 20*time.Second),
+
+		WorkerCPURequest:    getenv("WORKER_CPU_REQUEST", "500m"),
+		WorkerCPULimit:      getenv("WORKER_CPU_LIMIT", "2000m"),
+		WorkerMemoryRequest: getenv("WORKER_MEMORY_REQUEST", "1Gi"),
+		WorkerMemoryLimit:   getenv("WORKER_MEMORY_LIMIT", "4Gi"),
 	}
 
 	c.validate()
