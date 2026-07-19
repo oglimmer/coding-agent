@@ -250,6 +250,35 @@ bounded_runner() {
     "$secs" "$f"
 }
 
+# Run CMD under bounded_runner, recording how long it took and whether the bound
+# killed it rather than the command failing on its own. GNU timeout exits 124
+# when its TERM ends the child and 137 when the --kill-after KILL was needed;
+# both mean "never finished", which is a different diagnosis from "the checks
+# failed" and must not be reported as a red command — a killed process leaves no
+# error in its log, so the two are otherwise indistinguishable to a reader.
+# Sets BOUNDED_RC / BOUNDED_ELAPSED / BOUNDED_STATUS (ok|timeout|failed) and
+# returns the command's exit code. LOG is truncated unless APPEND is non-empty.
+BOUNDED_RC=0
+BOUNDED_ELAPSED=0
+BOUNDED_STATUS=""
+run_bounded() {
+  local cmd="$1" secs="$2" log="$3" append="${4:-}" start
+  start=$SECONDS
+  BOUNDED_RC=0
+  if [ -n "$append" ]; then
+    bash -c "$(bounded_runner "$cmd" "$secs")" >>"$log" 2>&1 || BOUNDED_RC=$?
+  else
+    bash -c "$(bounded_runner "$cmd" "$secs")" >"$log" 2>&1 || BOUNDED_RC=$?
+  fi
+  BOUNDED_ELAPSED=$((SECONDS - start))
+  case "$BOUNDED_RC" in
+    0)       BOUNDED_STATUS="ok" ;;
+    124|137) BOUNDED_STATUS="timeout" ;;
+    *)       BOUNDED_STATUS="failed" ;;
+  esac
+  return "$BOUNDED_RC"
+}
+
 # Install node deps in DIR when it has a package.json and no node_modules yet.
 prepare_npm_dir() {
   local dir="$1"
@@ -320,13 +349,17 @@ prepare_cmd_deps() {
 # is already RED on untouched main (broken config, missing tool, red base) the
 # agent can never make it green. Check it once and fail fast with a reason.
 if [ -n "$VERIFY_CMD" ]; then
-  echo "=== checking repo verify command on clean baseline: ${VERIFY_CMD} ==="
+  echo "=== checking repo verify command on clean baseline: ${VERIFY_CMD} (bounded ${VERIFY_TIMEOUT}s) ==="
   prepare_cmd_deps "$VERIFY_CMD" || true
-  if bash -c "$(bounded_runner "$VERIFY_CMD" "$VERIFY_TIMEOUT")" >/work/verify-baseline.log 2>&1; then
-    echo "=== verify command green at baseline ==="
+  if run_bounded "$VERIFY_CMD" "$VERIFY_TIMEOUT" /work/verify-baseline.log; then
+    echo "=== verify command green at baseline (${BOUNDED_ELAPSED}s) ==="
+  elif [ "$BOUNDED_STATUS" = "timeout" ]; then
+    echo "=== repo verify command TIMED OUT at baseline after ${BOUNDED_ELAPSED}s (bound ${VERIFY_TIMEOUT}s) ==="
+    tail -c 12000 /work/verify-baseline.log
+    fail "repo verify command (AGENT_VERIFY_CMD) did not finish within ${VERIFY_TIMEOUT}s on untouched ${BASE_BRANCH} — it did not fail, it never completed, so its log ends mid-run with no error. Raise AGENT_VERIFY_TIMEOUT, or make the command faster or hermetic (a gate that reaches the network can stall indefinitely)"
   else
-    echo "=== repo verify command is RED at baseline ==="
-    tail -20 /work/verify-baseline.log
+    echo "=== repo verify command is RED at baseline (exit ${BOUNDED_RC}, ${BOUNDED_ELAPSED}s) ==="
+    tail -c 12000 /work/verify-baseline.log
     fail "repo verify command (AGENT_VERIFY_CMD) fails on untouched ${BASE_BRANCH}; fix the repository's verify setting — not spending an agent run on it"
   fi
 fi
@@ -508,7 +541,15 @@ run_verify() {
   fi
   if [ -n "$EFFECTIVE_VERIFY" ]; then
     echo "=== verify: ${EFFECTIVE_VERIFY} (bounded ${VERIFY_TIMEOUT}s, CI mode) ===" | tee -a /work/verify.log
-    bash -c "$(bounded_runner "$EFFECTIVE_VERIFY" "$VERIFY_TIMEOUT")" >>/work/verify.log 2>&1 || rc=$?
+    run_bounded "$EFFECTIVE_VERIFY" "$VERIFY_TIMEOUT" /work/verify.log append || rc=$?
+    # Recorded into verify.log itself: the findings handed to Claude are a tail of
+    # that file, so a timeout has to be stated there or the model sees a truncated
+    # log with no failure in it and "fixes" whatever happened to be last.
+    if [ "$BOUNDED_STATUS" = "timeout" ]; then
+      echo "=== verify TIMED OUT after ${BOUNDED_ELAPSED}s (bound ${VERIFY_TIMEOUT}s); output above is cut off mid-run, not a failure ===" | tee -a /work/verify.log
+    else
+      echo "=== verify finished in ${BOUNDED_ELAPSED}s (exit ${BOUNDED_RC}) ===" | tee -a /work/verify.log
+    fi
   fi
   return $rc
 }
